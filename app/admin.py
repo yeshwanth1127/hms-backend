@@ -156,7 +156,7 @@ def update_doctor(doctor_id: str, body: DoctorAdminUpdate,
 
 @router.get("/schedules", response_model=list[ScheduleRuleOut])
 def schedules(doctor_id: str | None = None, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    statement = select(ScheduleRule).order_by(ScheduleRule.weekday, ScheduleRule.starts_at_local)
+    statement = select(ScheduleRule).order_by(ScheduleRule.schedule_date, ScheduleRule.starts_at_local)
     if doctor_id:
         statement = statement.where(ScheduleRule.doctor_id == doctor_id)
     return db.scalars(statement).all()

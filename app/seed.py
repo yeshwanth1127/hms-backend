@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -53,8 +53,11 @@ def seed_catalogue(db: Session) -> None:
         db.add(doctor)
         db.flush()
         for weekday in range(0, 6):
+            effective_from = date(2026, 1, 1)
+            schedule_date = effective_from + timedelta(
+                days=(weekday - effective_from.weekday()) % 7)
             db.add(ScheduleRule(doctor_id=doctor.id, branch_id=branches[0].id, weekday=weekday,
                                 starts_at_local=time(9), ends_at_local=time(17), slot_minutes=30,
-                                consultation_type="in_person", effective_from=date(2026, 1, 1)))
+                                consultation_type="in_person", schedule_date=schedule_date,
+                                effective_from=effective_from))
     db.commit()
-

@@ -51,7 +51,7 @@ def availability(db: Session, doctor_id: str, branch_id: str, start_date: date, 
     rules = db.scalars(select(ScheduleRule).where(
         ScheduleRule.doctor_id == doctor_id, ScheduleRule.branch_id == branch_id,
         ScheduleRule.consultation_type == consultation_type, ScheduleRule.is_active.is_(True),
-        ScheduleRule.effective_from <= end_date,
+        ScheduleRule.schedule_date <= end_date,
         or_(ScheduleRule.effective_until.is_(None), ScheduleRule.effective_until >= start_date),
     )).all()
     range_start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc) - timedelta(days=1)
@@ -70,7 +70,9 @@ def availability(db: Session, doctor_id: str, branch_id: str, start_date: date, 
     cursor = start_date
     while cursor <= end_date:
         for rule in rules:
-            if rule.weekday != cursor.weekday() or cursor < rule.effective_from or (rule.effective_until and cursor > rule.effective_until):
+            if (rule.weekday != cursor.weekday() or cursor < rule.schedule_date
+                    or cursor < rule.effective_from
+                    or (rule.effective_until and cursor > rule.effective_until)):
                 continue
             local_start = datetime.combine(cursor, rule.starts_at_local, tzinfo=zone)
             local_end = datetime.combine(cursor, rule.ends_at_local, tzinfo=zone)

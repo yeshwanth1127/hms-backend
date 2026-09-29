@@ -2,15 +2,15 @@ import secrets
 from datetime import date
 
 from fastapi import APIRouter, Depends, Header, Query, Response
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
-from .models import Appointment, Doctor, Reservation, VoiceSession, VoiceToolCall, utcnow
+from .models import Appointment, Branch, Doctor, Reservation, ScheduleRule, VoiceSession, VoiceToolCall, utcnow
 from .schemas import (
     AppointmentCreate, AppointmentOut, AvailabilityResponse, DoctorOut, HoldCreate, HoldOut,
-    VoiceSessionCreate, VoiceSessionEnd, VoiceSessionEvent,
+    VoiceDoctorOut, VoiceSessionCreate, VoiceSessionEnd, VoiceSessionEvent,
 )
 from .services import DomainError, availability, confirm_appointment, create_hold
 
@@ -23,7 +23,7 @@ def require_voice_service(x_service_key: str = Header(alias="X-Service-Key")) ->
     return "voice-runtime"
 
 
-@router.get("/doctors", response_model=list[DoctorOut])
+@router.get("/doctors", response_model=list[VoiceDoctorOut])
 def doctors(department: str | None = None, branch: str | None = None,
             _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
     items = db.scalars(select(Doctor).where(Doctor.is_active.is_(True)).order_by(Doctor.name)).unique().all()
@@ -32,13 +32,46 @@ def doctors(department: str | None = None, branch: str | None = None,
         items = [item for item in items if any(
             needle in value.name.casefold() or needle == value.slug.casefold() for value in item.departments
         )]
+    active_rules = db.scalars(select(ScheduleRule).where(
+        ScheduleRule.is_active.is_(True),
+        or_(ScheduleRule.effective_until.is_(None), ScheduleRule.effective_until >= date.today()),
+    )).all()
+    branch_by_id = {
+        item.id: item for item in db.scalars(
+            select(Branch).where(Branch.is_active.is_(True)).order_by(Branch.name)
+        ).all()
+    }
+    scheduled_branches: dict[str, dict[str, set[str]]] = {}
+    for rule in active_rules:
+        modes = scheduled_branches.setdefault(rule.doctor_id, {
+            "in_person": set(), "virtual": set(),
+        })
+        modes.setdefault(rule.consultation_type, set()).add(rule.branch_id)
+
+    result = []
+    for item in items:
+        doctor = DoctorOut.model_validate(item)
+        modes = scheduled_branches.get(item.id, {"in_person": set(), "virtual": set()})
+        # A schedule is the source of truth for where each consultation mode is
+        # actually bookable. Virtual-care branches need not be attached to a
+        # doctor's physical profile locations.
+        in_person = [branch_by_id[value] for value in modes["in_person"] if value in branch_by_id]
+        virtual = [branch_by_id[value] for value in modes["virtual"] if value in branch_by_id]
+        in_person.sort(key=lambda value: value.name)
+        virtual.sort(key=lambda value: value.name)
+        result.append(VoiceDoctorOut(
+            **doctor.model_dump(exclude={"branches", "accepts_virtual"}),
+            branches=in_person, in_person_branches=in_person, virtual_branches=virtual,
+            accepts_virtual=bool(virtual),
+        ))
+
     if branch:
         needle = branch.casefold()
-        items = [item for item in items if any(
+        result = [item for item in result if any(
             needle in value.name.casefold() or needle in value.area.casefold() or needle == value.slug.casefold()
             for value in item.branches
         )]
-    return items
+    return result
 
 
 @router.get("/availability", response_model=AvailabilityResponse)
@@ -70,6 +103,25 @@ def appointment_create(body: AppointmentCreate, _: str = Depends(require_voice_s
     if body.origin_channel != "voice":
         raise DomainError("INVALID_ORIGIN", "Voice service bookings must use the voice origin.", 422)
     return confirm_appointment(db, body)
+
+
+@router.get("/appointments", response_model=list[AppointmentOut])
+def appointment_lookup(patient_phone: str = Query(min_length=7, max_length=32),
+                       confirmation_code: str | None = Query(default=None, min_length=4, max_length=20),
+                       limit: int = Query(default=10, ge=1, le=25),
+                       _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
+    """Look up a caller's appointments without exposing an unfiltered patient list."""
+    statement = (
+        select(Appointment)
+        .where(Appointment.patient_phone == patient_phone.strip())
+        .order_by(Appointment.created_at.desc())
+        .limit(limit)
+    )
+    if confirmation_code:
+        statement = statement.where(
+            Appointment.confirmation_code == confirmation_code.strip().upper()
+        )
+    return db.scalars(statement).unique().all()
 
 
 @router.post("/sessions", status_code=201)

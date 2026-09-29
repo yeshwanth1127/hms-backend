@@ -5,7 +5,7 @@ The transactional source of truth for the Avocado Health website, future staff t
 ## Implemented first slice
 
 - Branch, department, and doctor catalogue APIs
-- Recurring doctor schedule rules
+- Recurring doctor schedule rules with an explicit `schedule_date` anchor
 - Availability generation in the branch timezone
 - Short-lived, concurrency-safe slot holds
 - Appointment confirmation from a valid hold
@@ -15,7 +15,7 @@ The transactional source of truth for the Avocado Health website, future staff t
 - PostgreSQL migration, Docker Compose, and API tests
 - Authenticated WhatsApp booking service API, staff PDF/photo uploads, support cases, and reminder jobs
 
-The voice agent must call this API for availability and bookings. It must only speak a confirmation after `POST /api/v1/appointments` succeeds.
+The voice agent uses the authenticated `/api/v1/integrations/voice/*` routes as its source of truth for doctors, schedulable branches, availability, holds, and bookings. It must only speak a confirmation after the appointment endpoint succeeds.
 
 ## Run locally
 
@@ -38,6 +38,8 @@ DATABASE_URL=sqlite:///./avocado.db .venv/bin/uvicorn app.main:app --reload
 ## Important behavior
 
 - Availability is advisory until a hold is created.
+- `schedule_date` is the first concrete occurrence of a weekly schedule; `effective_until` can end the recurrence.
+- Voice directory responses include only branches that currently have an active schedule for that doctor.
 - Holds expire after the configured duration.
 - A database constraint prevents two active reservations for the same doctor and exact time range.
 - Confirmation, status history, and the notification outbox event commit together.

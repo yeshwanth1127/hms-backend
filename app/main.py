@@ -58,14 +58,14 @@ async def domain_error(request: Request, exc: DomainError):
 
 @app.get("/api/health/live")
 def live():
-    return {"alive": True}
+    return {"alive": True, "service": "exora-hospital-backend", "api_version": "v1"}
 
 
 @app.get("/api/health/ready")
 def ready():
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
-    return {"ready": True}
+    return {"ready": True, "service": "exora-hospital-backend", "api_version": "v1"}
 
 
 app.include_router(router)

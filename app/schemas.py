@@ -1,7 +1,7 @@
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class APIModel(BaseModel):
@@ -39,6 +39,11 @@ class DoctorOut(APIModel):
     photo_asset_id: str | None = None
     departments: list[DepartmentOut]
     branches: list[BranchOut]
+
+
+class VoiceDoctorOut(DoctorOut):
+    in_person_branches: list[BranchOut]
+    virtual_branches: list[BranchOut]
 
 
 class AvailabilitySlot(APIModel):
@@ -122,12 +127,32 @@ class ScheduleRuleCreate(BaseModel):
     doctor_id: str
     branch_id: str
     consultation_type: Literal["in_person", "virtual"] = "in_person"
-    weekday: int = Field(ge=0, le=6)
+    schedule_date: date | None = None
+    weekday: int | None = Field(default=None, ge=0, le=6)
     starts_at_local: time
     ends_at_local: time
     slot_minutes: int = Field(default=30, ge=10, le=240)
-    effective_from: date
+    effective_from: date | None = None
     effective_until: date | None = None
+
+    @model_validator(mode="after")
+    def normalize_schedule_dates(self):
+        if self.schedule_date is None:
+            if self.effective_from is None or self.weekday is None:
+                raise ValueError("schedule_date is required for new schedules")
+            offset = (self.weekday - self.effective_from.weekday()) % 7
+            self.schedule_date = self.effective_from + timedelta(days=offset)
+        if self.weekday is None:
+            self.weekday = self.schedule_date.weekday()
+        if self.weekday != self.schedule_date.weekday():
+            raise ValueError("weekday must match schedule_date")
+        if self.effective_from is None:
+            self.effective_from = self.schedule_date
+        if self.schedule_date < self.effective_from:
+            raise ValueError("schedule_date cannot be before effective_from")
+        if self.effective_until is not None and self.effective_until < self.schedule_date:
+            raise ValueError("effective_until cannot be before schedule_date")
+        return self
 
 
 class ScheduleRuleOut(APIModel):
@@ -135,6 +160,7 @@ class ScheduleRuleOut(APIModel):
     doctor_id: str
     branch_id: str
     consultation_type: str
+    schedule_date: date
     weekday: int
     starts_at_local: time
     ends_at_local: time

@@ -72,6 +72,7 @@ class ScheduleRule(Base):
     doctor_id: Mapped[str] = mapped_column(ForeignKey("doctors.id"), index=True)
     branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id"), index=True)
     consultation_type: Mapped[str] = mapped_column(String(32), default="in_person")
+    schedule_date: Mapped[date] = mapped_column(Date, index=True)
     weekday: Mapped[int] = mapped_column(Integer)
     starts_at_local: Mapped[time] = mapped_column(Time)
     ends_at_local: Mapped[time] = mapped_column(Time)
