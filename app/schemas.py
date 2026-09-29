@@ -23,6 +23,7 @@ class DepartmentOut(APIModel):
     name: str
     tagline: str
     description: str
+    guide_asset_id: str | None = None
 
 
 class DoctorOut(APIModel):
@@ -35,6 +36,7 @@ class DoctorOut(APIModel):
     consultation_fee: int
     accepts_virtual: bool
     image_url: str | None
+    photo_asset_id: str | None = None
     departments: list[DepartmentOut]
     branches: list[BranchOut]
 
@@ -80,7 +82,8 @@ class AppointmentCreate(BaseModel):
     patient_phone: str = Field(min_length=7, max_length=32)
     patient_email: EmailStr | None = None
     reason: str | None = Field(default=None, max_length=800)
-    origin_channel: Literal["web", "voice", "staff"] = "web"
+    origin_channel: Literal["web", "voice", "staff", "whatsapp"] = "web"
+    consent_to_reminders: bool = False
     idempotency_key: str = Field(min_length=8, max_length=120)
 
 
@@ -93,8 +96,15 @@ class AppointmentOut(APIModel):
     reason: str | None
     status: str
     origin_channel: str
+    consent_to_reminders: bool = False
     created_at: datetime
     reservation: HoldOut
+
+
+class WhatsAppAppointmentOut(AppointmentOut):
+    doctor_name: str
+    branch_name: str
+    timezone: str
 
 
 class CancelRequest(BaseModel):
@@ -154,3 +164,55 @@ class VoiceSessionEvent(BaseModel):
 
 class VoiceSessionEnd(BaseModel):
     status: Literal["completed", "abandoned", "error"] = "completed"
+
+
+class WhatsAppHoldCreate(BaseModel):
+    sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
+    doctor_id: str
+    branch_id: str
+    consultation_type: Literal["in_person", "virtual"] = "in_person"
+    starts_at: datetime
+    ends_at: datetime
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
+class WhatsAppAppointmentCreate(BaseModel):
+    sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
+    hold_id: str
+    patient_name: str = Field(min_length=2, max_length=160)
+    consent_to_reminders: bool = False
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
+class WhatsAppReschedule(BaseModel):
+    sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
+    new_hold_id: str
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
+class WhatsAppCancel(BaseModel):
+    sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
+    reason: str = Field(min_length=2, max_length=240)
+
+
+class WhatsAppCaseCreate(BaseModel):
+    sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
+    kind: Literal["issue", "feedback"]
+    description: str = Field(min_length=1, max_length=2000)
+    rating: int | None = Field(default=None, ge=1, le=5)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
+class SupportCaseStatusUpdate(BaseModel):
+    status: Literal["open", "in_progress", "resolved"]
+
+
+class ReminderComplete(BaseModel):
+    status: Literal["sent", "failed"]
+    error: str | None = Field(default=None, max_length=240)
+
+
+class WhatsAppConversationSave(BaseModel):
+    state: dict
+    last_message_id: str = Field(min_length=8, max_length=120)
+    last_reply: dict

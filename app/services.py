@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .models import (
     Appointment, AppointmentStatusHistory, Branch, Doctor, OutboxEvent,
-    Reservation, ScheduleException, ScheduleRule, utcnow,
+    ReminderJob, Reservation, ScheduleException, ScheduleRule, utcnow,
 )
 from .schemas import AppointmentCreate, AvailabilitySlot, HoldCreate
 
@@ -137,6 +137,7 @@ def confirm_appointment(db: Session, body: AppointmentCreate) -> Appointment:
         patient_name=body.patient_name.strip(), patient_phone=body.patient_phone.strip(),
         patient_email=str(body.patient_email) if body.patient_email else None,
         reason=body.reason.strip() if body.reason else None, origin_channel=body.origin_channel,
+        consent_to_reminders=body.consent_to_reminders,
         idempotency_key=body.idempotency_key, status="confirmed",
     )
     db.add(appointment)
@@ -147,6 +148,10 @@ def confirm_appointment(db: Session, body: AppointmentCreate) -> Appointment:
                                     actor_type=body.origin_channel, actor_id=body.owner_key))
     db.add(OutboxEvent(event_type="appointment.confirmed", aggregate_id=appointment.id,
                        payload={"appointment_id": appointment.id, "confirmation_code": appointment.confirmation_code}))
+    if body.origin_channel == "whatsapp" and body.consent_to_reminders:
+        due_at = max(now, _db_utc(hold.starts_at) - timedelta(days=1))
+        db.add(ReminderJob(appointment_id=appointment.id, sender_id=body.patient_phone.lstrip("+"),
+                           due_at=due_at, status="pending", attempts=0))
     try:
         db.commit()
     except IntegrityError as exc:
@@ -171,6 +176,9 @@ def cancel_appointment(db: Session, appointment: Appointment, actor_id: str, rea
                                     actor_type="patient", actor_id=actor_id, reason=reason))
     db.add(OutboxEvent(event_type="appointment.cancelled", aggregate_id=appointment.id,
                        payload={"appointment_id": appointment.id, "confirmation_code": appointment.confirmation_code}))
+    reminder = db.scalar(select(ReminderJob).where(ReminderJob.appointment_id == appointment.id))
+    if reminder and reminder.status != "sent":
+        reminder.status = "cancelled"
     db.commit()
     db.refresh(appointment)
     return appointment

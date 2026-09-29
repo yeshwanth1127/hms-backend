@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     slot_hold_minutes: int = 7
     admin_api_key: str = "dev-admin-key"
     voice_service_api_key: str = "dev-voice-service-key"
+    whatsapp_service_api_key: str = "dev-whatsapp-service-key"
+    whatsapp_owner_secret: str = "dev-whatsapp-owner-secret"
+    media_dir: str = "./uploads"
 
     @property
     def origins(self) -> list[str]:

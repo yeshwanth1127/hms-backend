@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhatsApp content desk · Avocado Health</title>
+  <style>
+    :root { color-scheme: light; --ink:#17332c; --forest:#174d3b; --lime:#c9eb8a; --paper:#f4f5ed; --line:#ced8ca; --quiet:#52675d; --error:#a83336; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font-family:"Avenir Next",Avenir,sans-serif; }
+    button,input,select { font:inherit; }
+    .shell { max-width:1400px; margin:auto; padding:32px clamp(20px,4vw,64px) 80px; }
+    .masthead { display:flex; justify-content:space-between; align-items:center; gap:24px; padding-bottom:24px; border-bottom:1px solid var(--line); }
+    .brand { display:flex; align-items:center; gap:12px; font-weight:800; letter-spacing:-.04em; font-size:20px; }
+    .mark { width:30px; height:30px; border-radius:10px 10px 16px 16px; background:var(--forest); position:relative; transform:rotate(-8deg); }
+    .mark::after { content:""; position:absolute; width:9px; height:14px; border-radius:100% 0; background:var(--lime); left:15px; top:-8px; transform:rotate(40deg); }
+    .eyebrow { text-transform:uppercase; letter-spacing:.18em; font-size:11px; font-weight:800; color:var(--quiet); }
+    h1,h2 { font-family:"Iowan Old Style",Georgia,serif; font-weight:500; letter-spacing:-.05em; }
+    h1 { font-size:clamp(46px,7vw,96px); line-height:.94; margin:28px 0 18px; max-width:800px; }
+    h2 { font-size:36px; margin:0 0 8px; }
+    .intro { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(260px,.7fr); gap:40px; align-items:end; padding:16px 0 42px; }
+    .intro p { color:var(--quiet); line-height:1.55; max-width:440px; margin:0 0 8px auto; }
+    .auth { display:flex; gap:10px; align-items:center; padding:18px; background:#e5ebdd; border:1px solid var(--line); border-radius:14px; margin-bottom:32px; }
+    .auth label { white-space:nowrap; font-size:13px; font-weight:800; }
+    .auth input { min-width:0; flex:1; padding:12px 14px; border:1px solid #a9b8aa; border-radius:8px; background:white; }
+    button { border:0; border-radius:8px; padding:12px 18px; background:var(--forest); color:white; cursor:pointer; font-weight:750; }
+    button:hover { background:#0d3527; }
+    button:focus-visible,input:focus-visible,.drop:focus-visible { outline:3px solid #65a069; outline-offset:3px; }
+    .status { min-height:24px; font-size:13px; font-weight:700; margin:-16px 0 28px; color:var(--forest); }
+    .status.error { color:var(--error); }
+    .section-head { display:flex; align-items:end; justify-content:space-between; gap:20px; border-top:1px solid var(--ink); padding:24px 0 18px; }
+    .section-head p { color:var(--quiet); margin:0 0 7px; max-width:360px; font-size:14px; line-height:1.5; }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-bottom:54px; }
+    .card { background:white; border:1px solid var(--line); border-radius:14px; padding:20px; min-height:206px; display:flex; flex-direction:column; }
+    .card .index { color:var(--quiet); font-size:11px; letter-spacing:.15em; font-weight:800; }
+    .card h3 { margin:10px 0 4px; font-size:20px; letter-spacing:-.03em; line-height:1.15; }
+    .card .detail { color:var(--quiet); font-size:12px; line-height:1.4; min-height:18px; margin:0 0 14px; }
+    .drop { margin-top:auto; border:1px dashed #8da497; border-radius:10px; background:#f5f8f1; min-height:74px; padding:13px; display:flex; align-items:center; justify-content:center; text-align:center; cursor:pointer; color:var(--forest); font-size:13px; font-weight:750; }
+    .drop.dragging { background:var(--lime); border-style:solid; }
+    .drop small { display:block; color:var(--quiet); font-size:11px; font-weight:500; margin-top:4px; }
+    .attached { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--forest); font-size:12px; font-weight:700; margin-top:11px; }
+    .empty { border:1px dashed var(--line); border-radius:12px; padding:22px; color:var(--quiet); grid-column:1/-1; }
+    .cases { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+    .case { background:#e9efe4; border:1px solid var(--line); padding:18px; border-radius:12px; }
+    .case strong { display:block; margin:5px 0 8px; }
+    .case p { white-space:pre-wrap; overflow-wrap:anywhere; margin:0 0 10px; line-height:1.5; }
+    .case a { color:var(--forest); font-weight:750; }
+    .case select { display:block; width:100%; margin:10px 0; padding:9px; border:1px solid #a9b8aa; border-radius:8px; background:white; color:var(--ink); }
+    footer { margin-top:60px; padding-top:20px; border-top:1px solid var(--line); color:var(--quiet); font-size:12px; }
+    @media(max-width:900px) { .grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .intro { grid-template-columns:1fr; gap:12px; } .intro p { margin:0; } }
+    @media(max-width:640px) { .grid,.cases { grid-template-columns:1fr; } .masthead .eyebrow { display:none; } .auth { flex-wrap:wrap; } .auth label { width:100%; } .auth button { width:100%; } .section-head { display:block; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="masthead"><div class="brand"><span class="mark" aria-hidden="true"></span> Avocado Health</div><span class="eyebrow">WhatsApp content desk / staff only</span></header>
+    <div class="intro"><div><p class="eyebrow">01 / Content management</p><h1>Give every doctor the right introduction.</h1></div><p>Upload one PDF for each specialty and a photo for each doctor. Patients receive the specialty guide before the doctor list in WhatsApp. Changes appear on the next conversation.</p></div>
+    <form class="auth" id="auth-form"><label for="admin-key">Admin key</label><input id="admin-key" type="password" autocomplete="off" placeholder="Enter the backend admin key" required><button type="submit">Open content desk</button></form>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+    <section aria-labelledby="guides-title"><div class="section-head"><div><p class="eyebrow">02 / Specialty guides</p><h2 id="guides-title">PDF guides</h2></div><p>Use clinic-approved details only. The guide is sent before the doctor list.</p></div><div id="guides" class="grid"><div class="empty">Enter the admin key to load specialties.</div></div></section>
+    <section aria-labelledby="doctors-title"><div class="section-head"><div><p class="eyebrow">03 / Doctor portraits</p><h2 id="doctors-title">Doctor photos</h2></div><p>PNG or JPEG, up to 5 MB. A doctor without a photo still has a text profile.</p></div><div id="doctors" class="grid"><div class="empty">Doctor profiles will appear here.</div></div></section>
+    <section aria-labelledby="cases-title"><div class="section-head"><div><p class="eyebrow">04 / Patient care</p><h2 id="cases-title">Issues and feedback</h2></div><p>Messages and attachments sent through the bot are private staff cases.</p></div><div id="cases" class="cases"><div class="empty">Cases will appear here.</div></div></section>
+    <footer>Admin key stays in this page’s memory only. Use this desk over HTTPS outside your computer.</footer>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let adminKey = '';
+    function status(message, error = false) { $('status').textContent = message; $('status').className = error ? 'status error' : 'status'; }
+    async function request(path, options = {}) {
+      const response = await fetch(path, { ...options, headers: { 'X-Admin-Key': adminKey, ...(options.headers || {}) } });
+      if (!response.ok) { let detail = ''; try { detail = (await response.json()).error?.message || ''; } catch {} throw new Error(detail || `Request failed (${response.status})`); }
+      return response.json();
+    }
+    function node(tag, cls, content) { const element = document.createElement(tag); if (cls) element.className = cls; if (content !== undefined) element.textContent = content; return element; }
+    function card(item, kind, index) {
+      const box = node('article', 'card'); box.append(node('span', 'index', `${kind === 'guide' ? 'SPECIALTY' : 'DOCTOR'} / ${String(index + 1).padStart(2, '0')}`));
+      box.append(node('h3', '', item.name)); box.append(node('p', 'detail', kind === 'guide' ? item.slug : `${item.title} · ${item.departments.join(', ')}`));
+      const zone = node('div', 'drop'); zone.tabIndex = 0; zone.setAttribute('role', 'button'); zone.setAttribute('aria-label', `Upload ${kind === 'guide' ? 'PDF for' : 'photo for'} ${item.name}`);
+      zone.innerHTML = `<span>${kind === 'guide' ? 'Drop PDF here or choose file<small>PDF · 10 MB maximum</small>' : 'Drop portrait here or choose file<small>PNG / JPEG · 5 MB maximum</small>'}</span>`;
+      const input = node('input'); input.type = 'file'; input.accept = kind === 'guide' ? 'application/pdf,.pdf' : 'image/png,image/jpeg,.png,.jpg,.jpeg'; input.hidden = true;
+      const upload = async (file) => { if (!file) return; const form = new FormData(); form.append('file', file); const path = kind === 'guide' ? `/api/v1/admin/departments/${item.id}/guide` : `/api/v1/admin/doctors/${item.id}/photo`; try { status(`Uploading ${file.name}…`); await request(path, { method: 'POST', body: form }); status(`${item.name} updated.`); await load(); } catch (error) { status(error.message, true); } };
+      zone.addEventListener('click', () => input.click()); zone.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); input.click(); } });
+      input.addEventListener('change', () => upload(input.files[0])); zone.addEventListener('dragover', (event) => { event.preventDefault(); zone.classList.add('dragging'); }); zone.addEventListener('dragleave', () => zone.classList.remove('dragging'));
+      zone.addEventListener('drop', (event) => { event.preventDefault(); zone.classList.remove('dragging'); upload(event.dataTransfer.files[0]); });
+      box.append(zone, input); const asset = kind === 'guide' ? item.guide : item.photo; box.append(node('span', 'attached', asset ? `Current: ${asset.filename}` : 'No file uploaded yet'));
+      return box;
+    }
+    async function load() {
+      const [inventory, cases] = await Promise.all([request('/api/v1/admin/whatsapp-assets'), request('/api/v1/admin/whatsapp-cases')]);
+      for (const [target, items, kind] of [['guides', inventory.departments, 'guide'], ['doctors', inventory.doctors, 'photo']]) { const root = $(target); root.replaceChildren(...items.map((item, index) => card(item, kind, index))); if (!items.length) root.append(node('div', 'empty', 'No entries available.')); }
+      const root = $('cases'); root.replaceChildren(...cases.map((item) => { const box = node('article', 'case'); box.append(node('span', 'eyebrow', `${item.kind} · ${new Date(item.created_at).toLocaleDateString()}`)); box.append(node('strong', '', item.rating ? `Rating ${item.rating} / 5` : `Case ${item.id.slice(0, 8)}`)); box.append(node('p', '', item.description)); box.append(node('p', 'detail', `WhatsApp: +${item.sender_id}`)); const select = node('select'); select.setAttribute('aria-label', `Case ${item.id.slice(0, 8)} status`); for (const [value, label] of [['open', 'Open'], ['in_progress', 'In progress'], ['resolved', 'Resolved']]) { const option = node('option', '', label); option.value = value; option.selected = item.status === value; select.append(option); } select.addEventListener('change', async () => { try { await request(`/api/v1/admin/whatsapp-cases/${item.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: select.value }) }); status('Case updated.'); } catch (error) { select.value = item.status; status(error.message, true); } }); box.append(select); for (const attachment of item.attachments) { const link = node('a', '', attachment.asset.filename); link.href = '#'; link.addEventListener('click', async (event) => { event.preventDefault(); try { const response = await fetch(`/api/v1/admin/whatsapp-case-assets/${attachment.asset.id}`, { headers: { 'X-Admin-Key': adminKey } }); if (!response.ok) throw new Error('Could not download attachment'); const blob = await response.blob(); const url = URL.createObjectURL(blob); const temp = node('a'); temp.href = url; temp.download = attachment.asset.filename; temp.click(); setTimeout(() => URL.revokeObjectURL(url), 60000); } catch (error) { status(error.message, true); } }); box.append(link); } return box; })); if (!cases.length) root.append(node('div', 'empty', 'No cases yet.'));
+    }
+    $('auth-form').addEventListener('submit', async (event) => { event.preventDefault(); adminKey = $('admin-key').value; try { await load(); status('Content desk ready.'); $('admin-key').value = ''; } catch (error) { status(error.message, true); } });
+  </script>
+</body>
+</html>

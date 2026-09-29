@@ -46,6 +46,7 @@ class Department(Base):
     tagline: Mapped[str] = mapped_column(String(240), default="")
     description: Mapped[str] = mapped_column(Text, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    guide_asset_id: Mapped[str | None] = mapped_column(ForeignKey("media_assets.id"), nullable=True)
 
 
 class Doctor(Base):
@@ -59,6 +60,7 @@ class Doctor(Base):
     consultation_fee: Mapped[int] = mapped_column(Integer)
     accepts_virtual: Mapped[bool] = mapped_column(Boolean, default=False)
     image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photo_asset_id: Mapped[str | None] = mapped_column(ForeignKey("media_assets.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     departments: Mapped[list[Department]] = relationship(secondary=doctor_departments, lazy="selectin")
     branches: Mapped[list[Branch]] = relationship(secondary=doctor_branches, lazy="selectin")
@@ -119,6 +121,7 @@ class Appointment(Base):
     reason: Mapped[str | None] = mapped_column(String(800), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="confirmed")
     origin_channel: Mapped[str] = mapped_column(String(24), default="web")
+    consent_to_reminders: Mapped[bool] = mapped_column(Boolean, default=False)
     idempotency_key: Mapped[str] = mapped_column(String(120), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -145,6 +148,72 @@ class OutboxEvent(Base):
     payload: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MediaAsset(Base):
+    __tablename__ = "media_assets"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    kind: Mapped[str] = mapped_column(String(32))
+    original_name: Mapped[str] = mapped_column(String(255))
+    mime_type: Mapped[str] = mapped_column(String(100))
+    storage_name: Mapped[str] = mapped_column(String(100), unique=True)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SupportCase(Base):
+    __tablename__ = "support_cases"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner_key: Mapped[str] = mapped_column(String(160), index=True)
+    sender_id: Mapped[str] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(20))
+    description: Mapped[str] = mapped_column(Text)
+    rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="open")
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CaseAttachment(Base):
+    __tablename__ = "case_attachments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    case_id: Mapped[str] = mapped_column(ForeignKey("support_cases.id"), index=True)
+    asset_id: Mapped[str] = mapped_column(ForeignKey("media_assets.id"), unique=True)
+    source_message_id: Mapped[str] = mapped_column(String(120), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReminderJob(Base):
+    __tablename__ = "reminder_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    appointment_id: Mapped[str] = mapped_column(ForeignKey("appointments.id"), unique=True, index=True)
+    sender_id: Mapped[str] = mapped_column(String(32))
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RescheduleOperation(Base):
+    __tablename__ = "reschedule_operations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True)
+    owner_key: Mapped[str] = mapped_column(String(160))
+    appointment_id: Mapped[str] = mapped_column(ForeignKey("appointments.id"))
+    new_reservation_id: Mapped[str] = mapped_column(ForeignKey("reservations.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppConversation(Base):
+    __tablename__ = "whatsapp_conversations"
+    sender_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    state: Mapped[dict] = mapped_column(JSON)
+    last_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_reply: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class VoiceSession(Base):

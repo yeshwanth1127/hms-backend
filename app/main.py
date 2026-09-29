@@ -9,6 +9,8 @@ from sqlalchemy import text
 from .api import router
 from .admin import router as admin_router
 from .integrations import router as integrations_router
+from .whatsapp import router as whatsapp_router
+from .whatsapp_admin import router as whatsapp_admin_router, page_router as whatsapp_page_router
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .seed import seed_catalogue
@@ -21,6 +23,9 @@ async def lifespan(_: FastAPI):
         raise RuntimeError("ADMIN_API_KEY must be changed in production")
     if settings.app_env == "production" and settings.voice_service_api_key == "dev-voice-service-key":
         raise RuntimeError("VOICE_SERVICE_API_KEY must be changed in production")
+    if settings.app_env == "production" and (settings.whatsapp_service_api_key == "dev-whatsapp-service-key"
+                                              or settings.whatsapp_owner_secret == "dev-whatsapp-owner-secret"):
+        raise RuntimeError("WhatsApp service key and owner secret must be changed in production")
     if settings.app_env in {"development", "test"}:
         Base.metadata.create_all(engine)
         with SessionLocal() as db:
@@ -66,3 +71,6 @@ def ready():
 app.include_router(router)
 app.include_router(admin_router)
 app.include_router(integrations_router)
+app.include_router(whatsapp_router)
+app.include_router(whatsapp_admin_router)
+app.include_router(whatsapp_page_router)

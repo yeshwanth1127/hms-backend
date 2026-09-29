@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import settings
 from .db import get_db
 from .models import Appointment, Branch, Department, Doctor, Reservation
 from .schemas import (
@@ -13,6 +14,12 @@ from .schemas import (
 from .services import availability, cancel_appointment, confirm_appointment, create_hold
 
 router = APIRouter(prefix="/api/v1")
+
+
+def require_public_booking_pilot() -> None:
+    if settings.app_env == "production":
+        from .services import DomainError
+        raise DomainError("PATIENT_AUTH_REQUIRED", "Use an authenticated booking channel.", 403)
 
 
 @router.get("/branches", response_model=list[BranchOut])
@@ -53,12 +60,12 @@ def get_availability(doctor_id: str, branch_id: str, start_date: date,
 
 
 @router.post("/slot-holds", response_model=HoldOut, status_code=201)
-def hold_create(body: HoldCreate, db: Session = Depends(get_db)):
+def hold_create(body: HoldCreate, _: None = Depends(require_public_booking_pilot), db: Session = Depends(get_db)):
     return create_hold(db, body)
 
 
 @router.get("/slot-holds/{hold_id}", response_model=HoldOut)
-def hold_get(hold_id: str, owner_key: str, db: Session = Depends(get_db)):
+def hold_get(hold_id: str, owner_key: str, _: None = Depends(require_public_booking_pilot), db: Session = Depends(get_db)):
     hold = db.get(Reservation, hold_id)
     if not hold or hold.owner_key != owner_key:
         from .services import DomainError
@@ -67,7 +74,7 @@ def hold_get(hold_id: str, owner_key: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/slot-holds/{hold_id}", status_code=204)
-def hold_release(hold_id: str, owner_key: str, db: Session = Depends(get_db)):
+def hold_release(hold_id: str, owner_key: str, _: None = Depends(require_public_booking_pilot), db: Session = Depends(get_db)):
     hold = db.get(Reservation, hold_id)
     if hold and hold.owner_key == owner_key and hold.status == "active":
         hold.status = "released"
@@ -75,12 +82,13 @@ def hold_release(hold_id: str, owner_key: str, db: Session = Depends(get_db)):
 
 
 @router.post("/appointments", response_model=AppointmentOut, status_code=201)
-def appointment_create(body: AppointmentCreate, db: Session = Depends(get_db)):
+def appointment_create(body: AppointmentCreate, _: None = Depends(require_public_booking_pilot), db: Session = Depends(get_db)):
     return confirm_appointment(db, body)
 
 
 @router.get("/appointments/{appointment_id}", response_model=AppointmentOut)
-def appointment_get(appointment_id: str, owner_key: str = Header(alias="X-Owner-Key"), db: Session = Depends(get_db)):
+def appointment_get(appointment_id: str, owner_key: str = Header(alias="X-Owner-Key"),
+                    _: None = Depends(require_public_booking_pilot), db: Session = Depends(get_db)):
     item = db.get(Appointment, appointment_id)
     if not item or item.reservation.owner_key != owner_key:
         from .services import DomainError
@@ -90,10 +98,10 @@ def appointment_get(appointment_id: str, owner_key: str = Header(alias="X-Owner-
 
 @router.patch("/appointments/{appointment_id}/cancel", response_model=AppointmentOut)
 def appointment_cancel(appointment_id: str, body: CancelRequest,
-                       owner_key: str = Header(alias="X-Owner-Key"), db: Session = Depends(get_db)):
+                       owner_key: str = Header(alias="X-Owner-Key"),
+                       _: None = Depends(require_public_booking_pilot), db: Session = Depends(get_db)):
     item = db.get(Appointment, appointment_id)
     if not item or item.reservation.owner_key != owner_key:
         from .services import DomainError
         raise DomainError("APPOINTMENT_NOT_FOUND", "Appointment was not found.", 404)
     return cancel_appointment(db, item, body.actor_id, body.reason)
-
