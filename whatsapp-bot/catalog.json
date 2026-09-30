@@ -1,0 +1,15 @@
+{
+  "specialties": [
+    { "id": "general-care", "name": "General care", "pdf": "avocado-demo-general-care.pdf" },
+    { "id": "skin-care", "name": "Skin care", "pdf": "avocado-demo-skin-care.pdf" },
+    { "id": "heart-care", "name": "Heart care", "pdf": "avocado-demo-heart-care.pdf" }
+  ],
+  "clinicians": [
+    { "id": "sample-a", "name": "Sample Clinician A", "specialtyId": "general-care", "summary": "General wellness and routine visits", "times": ["10:00", "11:30"], "image": "doctors/sample-a.png" },
+    { "id": "sample-d", "name": "Sample Clinician D", "specialtyId": "general-care", "summary": "Preventive care and check-ins", "times": ["09:00", "14:00"], "image": "doctors/sample-d.png" },
+    { "id": "sample-b", "name": "Sample Clinician B", "specialtyId": "skin-care", "summary": "Skin concerns and follow-up visits", "times": ["12:00", "15:00"], "image": "doctors/sample-b.png" },
+    { "id": "sample-e", "name": "Sample Clinician E", "specialtyId": "skin-care", "summary": "Routine skin care consultations", "times": ["10:30", "16:00"], "image": "doctors/sample-e.png" },
+    { "id": "sample-c", "name": "Sample Clinician C", "specialtyId": "heart-care", "summary": "Heart health conversations", "times": ["09:30", "14:30"], "image": "doctors/sample-c.png" },
+    { "id": "sample-f", "name": "Sample Clinician F", "specialtyId": "heart-care", "summary": "Cardiovascular check-in visits", "times": ["11:00", "16:30"], "image": "doctors/sample-f.png" }
+  ]
+}

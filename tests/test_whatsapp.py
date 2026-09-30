@@ -1,5 +1,11 @@
 from datetime import date, datetime, timedelta
 import io
+import socket
+import struct
+import threading
+import tempfile
+from pathlib import Path
+import pytest
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -7,7 +13,10 @@ from pypdf import PdfWriter
 
 from app.main import app
 from app.db import SessionLocal
-from app.models import ReminderJob, utcnow
+from app.models import Appointment, Branch, Doctor, ReminderJob, Reservation, WhatsAppInbound, utcnow
+from app.whatsapp import owner_key
+from app.media import scan_bytes
+from app.services import DomainError
 from sqlalchemy import select
 
 
@@ -54,6 +63,12 @@ def test_whatsapp_booking_ownership_reschedule_cancel_and_reminder():
         assert booking["status"] == "confirmed"
         assert booking["origin_channel"] == "whatsapp"
         assert booking["doctor_name"]
+        assert len(booking["confirmation_code"]) == 20
+        by_code = client.get(f"/api/v1/integrations/whatsapp/appointments/by-code/{booking['confirmation_code']}",
+                             headers=SERVICE, params={"sender_id": SENDER})
+        assert by_code.status_code == 200 and by_code.json()["id"] == booking["id"]
+        assert client.get(f"/api/v1/integrations/whatsapp/appointments/by-code/{booking['confirmation_code']}",
+                          headers=SERVICE, params={"sender_id": OTHER}).status_code == 404
         reused_key = client.post("/api/v1/integrations/whatsapp/slot-holds", headers=SERVICE,
                                  json={**slots[0], "sender_id": OTHER,
                                        "idempotency_key": "wa-hold-lifecycle-1"})
@@ -103,6 +118,59 @@ def test_reminder_claim_and_completion():
         assert client.get("/api/v1/integrations/whatsapp/reminders/due", headers=SERVICE).json() == []
 
 
+def test_stale_claimed_reminder_is_not_resent():
+    with TestClient(app) as client:
+        booking, _ = _book(client, "reminder-stale")
+        with SessionLocal() as db:
+            job = db.scalar(select(ReminderJob).where(ReminderJob.appointment_id == booking["id"]))
+            job.due_at = utcnow() - timedelta(minutes=1)
+            db.commit()
+        due = client.get("/api/v1/integrations/whatsapp/reminders/due", headers=SERVICE).json()
+        assert len(due) == 1
+        with SessionLocal() as db:
+            job = db.get(ReminderJob, due[0]["id"])
+            job.claimed_at = utcnow() - timedelta(minutes=16)
+            db.commit()
+        assert client.get("/api/v1/integrations/whatsapp/reminders/due", headers=SERVICE).json() == []
+        with SessionLocal() as db:
+            assert db.get(ReminderJob, due[0]["id"]).status == "uncertain"
+
+
+def test_production_startup_rejects_development_defaults(monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "app_env", "production")
+    with pytest.raises(RuntimeError, match="strong production secret"):
+        with TestClient(app):
+            pass
+
+
+def test_appointment_pages_include_older_visits_and_preserve_owner_scope():
+    sender = "919866666666"
+    with TestClient(app) as client:
+        with SessionLocal() as db:
+            doctor = db.scalar(select(Doctor))
+            branch = db.scalar(select(Branch))
+            for index in range(11):
+                start = utcnow() + timedelta(days=30 + index)
+                hold = Reservation(doctor_id=doctor.id, branch_id=branch.id,
+                                   consultation_type="in_person", starts_at=start,
+                                   ends_at=start + timedelta(minutes=30), status="booked",
+                                   owner_key=owner_key(sender))
+                db.add(hold)
+                db.flush()
+                db.add(Appointment(confirmation_code=f"PAGE-{index:04d}", reservation_id=hold.id,
+                                   patient_name="Page Test", patient_phone=f"+{sender}", status="confirmed",
+                                   origin_channel="whatsapp", idempotency_key=f"page-test-{index}"))
+            db.commit()
+        url = "/api/v1/integrations/whatsapp/appointments/page"
+        first = client.get(url, headers=SERVICE, params={"sender_id": sender, "limit": 8}).json()
+        second = client.get(url, headers=SERVICE, params={"sender_id": sender, "limit": 8, "offset": 8}).json()
+        assert first["total"] == second["total"] == 11
+        assert len(first["items"]) == 8 and len(second["items"]) == 3
+        assert set(item["id"] for item in first["items"]).isdisjoint(item["id"] for item in second["items"])
+        assert client.get(url, headers=SERVICE, params={"sender_id": OTHER}).json()["total"] == 0
+
+
 def test_conversation_state_survives_requests():
     with TestClient(app) as client:
         path = f"/api/v1/integrations/whatsapp/conversations/{SENDER}"
@@ -119,6 +187,108 @@ def test_conversation_state_survives_requests():
         assert restored["state"]["draft"]["department"] == "cardiology"
         assert restored["last_reply"]["text"] == "Choose a doctor"
         assert client.get(path, headers={"X-Service-Key": "wrong"}).status_code == 401
+
+
+def test_inbound_queue_deduplicates_and_quarantines_ambiguous_sends():
+    with TestClient(app) as client:
+        path = "/api/v1/integrations/whatsapp/inbound"
+        message = {"message_id": "wamid.queue-one", "sender_id": SENDER,
+                   "payload": {"id": "wamid.queue-one", "from": SENDER, "type": "text", "text": "hi"}}
+        assert client.post(path, headers=SERVICE, json=message).status_code == 202
+        assert client.post(path, headers=SERVICE, json=message).json()["duplicate"] is True
+        assert client.post(path, headers=SERVICE, json={**message, "sender_id": OTHER}).status_code == 422
+        claimed = client.post(f"{path}/claim", headers=SERVICE).json()
+        assert claimed["message_id"] == message["message_id"]
+        token = {"claim_token": claimed["claim_token"]}
+        assert client.post(f"{path}/{message['message_id']}/sending", headers=SERVICE, json=token).status_code == 200
+        assert client.post(f"{path}/{message['message_id']}/failed", headers=SERVICE,
+                           json={**token, "error": "Meta timeout"}).json()["status"] == "uncertain"
+        assert client.post(f"{path}/claim", headers=SERVICE).json() is None
+        issues = client.get(f"{path}/issues", headers=SERVICE).json()
+        assert any(item["message_id"] == message["message_id"] for item in issues)
+        assert client.get("/api/v1/admin/whatsapp-delivery-issues").status_code == 422
+        staff_issues = client.get("/api/v1/admin/whatsapp-delivery-issues", headers=ADMIN).json()
+        assert any(item["message_id"] == message["message_id"] for item in staff_issues["inbound"])
+        with SessionLocal() as db:
+            stored = db.get(WhatsAppInbound, message["message_id"])
+            assert stored.payload == {}
+
+
+def test_inbound_retry_before_send_and_stale_send_quarantine():
+    with TestClient(app) as client:
+        path = "/api/v1/integrations/whatsapp/inbound"
+        for suffix in ("retry", "stale"):
+            body = {"message_id": f"wamid.{suffix}", "sender_id": SENDER,
+                    "payload": {"id": f"wamid.{suffix}", "from": SENDER, "type": "text", "text": "hi"}}
+            assert client.post(path, headers=SERVICE, json=body).status_code == 202
+        first = client.post(f"{path}/claim", headers=SERVICE).json()
+        assert first["message_id"] == "wamid.retry"
+        failed = client.post(f"{path}/{first['message_id']}/failed", headers=SERVICE,
+                             json={"claim_token": first["claim_token"], "error": "Backend unavailable"})
+        assert failed.json()["status"] == "pending"
+        with SessionLocal() as db:
+            item = db.get(WhatsAppInbound, first["message_id"])
+            item.available_at = utcnow() - timedelta(seconds=1)
+            db.commit()
+        replay = client.post(f"{path}/claim", headers=SERVICE).json()
+        assert replay["message_id"] == first["message_id"]
+        client.post(f"{path}/{replay['message_id']}/sending", headers=SERVICE,
+                    json={"claim_token": replay["claim_token"]})
+        assert client.post(f"{path}/{replay['message_id']}/sent", headers=SERVICE,
+                           json={"claim_token": replay["claim_token"]}).json()["status"] == "sent"
+        second = client.post(f"{path}/claim", headers=SERVICE).json()
+        assert second["message_id"] == "wamid.stale"
+        client.post(f"{path}/{second['message_id']}/sending", headers=SERVICE,
+                    json={"claim_token": second["claim_token"]})
+        with SessionLocal() as db:
+            item = db.get(WhatsAppInbound, second["message_id"])
+            item.claimed_at = utcnow() - timedelta(minutes=16)
+            db.commit()
+        assert client.post(f"{path}/claim", headers=SERVICE).json() is None
+        with SessionLocal() as db:
+            assert db.get(WhatsAppInbound, second["message_id"]).status == "uncertain"
+
+
+def test_clamav_stream_scan_accepts_clean_and_rejects_infected():
+    def serve(reply: bytes, path):
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(path))
+            listener.listen(1)
+            ready.set()
+            connection, _ = listener.accept()
+            with connection:
+                assert connection.recv(10) == b"zINSTREAM\0"
+                data = bytearray()
+                while True:
+                    length = struct.unpack(">I", connection.recv(4))[0]
+                    if not length:
+                        break
+                    while len(data) < length:
+                        data.extend(connection.recv(length - len(data)))
+                assert data == b"safe-content"
+                connection.sendall(reply + b"\0")
+
+    with tempfile.TemporaryDirectory(prefix="clamd-", dir="/tmp") as folder:
+        for index, reply in enumerate((b"stream: OK", b"stream: Eicar-Test-Signature FOUND")):
+            ready = threading.Event()
+            path = Path(folder) / f"scan-{index}.sock"
+            thread = threading.Thread(target=serve, args=(reply, path), daemon=True)
+            thread.start()
+            assert ready.wait(2)
+            if index == 0:
+                scan_bytes(b"safe-content", str(path))
+            else:
+                try:
+                    scan_bytes(b"safe-content", str(path))
+                    assert False, "infected content was accepted"
+                except DomainError as exc:
+                    assert exc.code == "UNSAFE_MEDIA"
+            thread.join(timeout=2)
+        try:
+            scan_bytes(b"safe-content", str(Path(folder) / "missing.sock"))
+            assert False, "missing scanner was accepted"
+        except DomainError as exc:
+            assert exc.code == "MEDIA_SCAN_UNAVAILABLE"
 
 
 def test_uploads_cases_and_validation(tmp_path, monkeypatch):

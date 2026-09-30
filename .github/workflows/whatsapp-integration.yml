@@ -1,0 +1,54 @@
+name: WhatsApp integration
+
+on:
+  push:
+    branches: [main, 'codex/whatsapp-*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install locked backend dependencies
+        run: |
+          python -m pip install uv
+          uv sync --locked --extra dev
+      - name: Backend and migration tests
+        run: uv run --locked pytest
+      - name: Bot tests and real HTTP integration
+        run: |
+          npm --prefix whatsapp-bot test
+          npm --prefix whatsapp-bot run test:integration
+      - name: Validate development Compose profile
+        run: |
+          cp .env.example .env
+          cp whatsapp-bot/.env.example whatsapp-bot/.env
+          docker compose --profile whatsapp config --quiet
+      - name: Build API and bot images
+        run: |
+          docker compose --profile whatsapp build
+      - name: PostgreSQL booking and queue integration
+        env:
+          HMS_TEST_DATABASE_URL: postgresql+psycopg://avocado:avocado@127.0.0.1:5432/avocado
+        run: |
+          docker compose up -d --wait api
+          npm --prefix whatsapp-bot run test:integration
+      - name: Start coupled development bot container
+        run: |
+          python -c "from pathlib import Path; p = Path('whatsapp-bot/.env'); p.write_text(p.read_text().replace('replace-with-meta-phone-number-id', '123456789').replace('replace-with-version-from-meta-dashboard', 'v24.0'))"
+          docker compose --profile whatsapp up -d --wait whatsapp
+          curl --fail http://127.0.0.1:8787/health/ready
+      - name: Stop disposable services
+        if: always()
+        run: docker compose down --volumes

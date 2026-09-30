@@ -8,3 +8,10 @@ uploads/
 uv.lock
 .coverage
 htmlcov/
+
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules/

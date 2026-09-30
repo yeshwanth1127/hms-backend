@@ -2,25 +2,28 @@
 
 import hashlib
 import hmac
+import json
+import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
-from .media import asset_row, media_path, save_upload
+from .media import asset_row, media_path, save_upload, scan_ready
 from .models import (Appointment, AppointmentStatusHistory, Branch, CaseAttachment, Department,
                      Doctor, MediaAsset, OutboxEvent, ReminderJob, Reservation, RescheduleOperation,
-                     SupportCase, WhatsAppConversation, utcnow)
+                     SupportCase, WhatsAppConversation, WhatsAppInbound, utcnow)
 from .schemas import (AppointmentCreate, AppointmentOut, AvailabilityResponse, BranchOut,
                       DepartmentOut, DoctorOut, HoldCreate, HoldOut, ReminderComplete,
                       WhatsAppAppointmentCreate, WhatsAppAppointmentOut, WhatsAppCancel, WhatsAppCaseCreate,
-                      WhatsAppConversationSave, WhatsAppHoldCreate, WhatsAppReschedule)
+                      WhatsAppConversationSave, WhatsAppHoldCreate, WhatsAppInboundCreate,
+                      WhatsAppInboundTransition, WhatsAppReschedule)
 from .services import DomainError, availability, cancel_appointment, confirm_appointment, create_hold
 
 router = APIRouter(prefix="/api/v1/integrations/whatsapp", tags=["whatsapp-integration"])
@@ -85,6 +88,144 @@ def conversation_save(sender_id: str, body: WhatsAppConversationSave,
     return {"saved": True}
 
 
+@router.post("/inbound", status_code=202)
+def inbound_enqueue(body: WhatsAppInboundCreate, _: None = Depends(require_whatsapp_service),
+                    db: Session = Depends(get_db)):
+    if len(json.dumps(body.payload, ensure_ascii=False)) > 16384:
+        raise DomainError("INBOUND_TOO_LARGE", "Inbound message metadata is too large.", 413)
+    if body.payload.get("id") != body.message_id or body.payload.get("from") != body.sender_id:
+        raise DomainError("INBOUND_MISMATCH", "Message ID or sender does not match its payload.", 422)
+    existing = db.get(WhatsAppInbound, body.message_id)
+    if existing:
+        if existing.sender_id != body.sender_id:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "Message ID belongs to another sender.", 409)
+        return {"accepted": True, "duplicate": True, "status": existing.status}
+    item = WhatsAppInbound(message_id=body.message_id, sender_id=body.sender_id,
+                           payload=body.payload, status="pending", attempts=0,
+                           available_at=utcnow())
+    db.add(item)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.get(WhatsAppInbound, body.message_id)
+        if not existing or existing.sender_id != body.sender_id:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "Message ID belongs to another sender.", 409)
+        return {"accepted": True, "duplicate": True, "status": existing.status}
+    return {"accepted": True, "duplicate": False, "status": "pending"}
+
+
+@router.get("/inbound/ready")
+def inbound_ready(_: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    db.execute(text("SELECT 1 FROM whatsapp_inbound LIMIT 1"))
+    if settings.app_env == "production":
+        scan_ready(settings.media_scan_socket)
+    return {"ready": True}
+
+
+@router.post("/inbound/claim")
+def inbound_claim(_: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    now = utcnow()
+    expired = db.scalars(select(WhatsAppInbound).where(
+        or_(and_(WhatsAppInbound.status == "sending",
+                 WhatsAppInbound.claimed_at < now - timedelta(minutes=15)),
+            and_(WhatsAppInbound.status == "processing", WhatsAppInbound.attempts >= 5,
+                 WhatsAppInbound.claimed_at < now - timedelta(minutes=15))))
+        .with_for_update(skip_locked=True)).all()
+    for item in expired:
+        item.status = "uncertain" if item.status == "sending" else "failed"
+        item.last_error = "Worker stopped before completing the message"
+        item.payload = {}
+        item.claim_token = None
+    if expired:
+        db.commit()
+    candidates = db.scalars(select(WhatsAppInbound).where(
+        WhatsAppInbound.attempts < 5,
+        or_(and_(WhatsAppInbound.status == "pending", WhatsAppInbound.available_at <= now),
+            and_(WhatsAppInbound.status == "processing",
+                 WhatsAppInbound.claimed_at < now - timedelta(minutes=15))))
+        .order_by(WhatsAppInbound.created_at, WhatsAppInbound.message_id)
+        .limit(20).with_for_update(skip_locked=True)).all()
+    for item in candidates:
+        older = db.scalar(select(WhatsAppInbound.message_id).where(
+            WhatsAppInbound.sender_id == item.sender_id,
+            WhatsAppInbound.status.in_(("pending", "processing", "sending")),
+            or_(WhatsAppInbound.created_at < item.created_at,
+                and_(WhatsAppInbound.created_at == item.created_at,
+                     WhatsAppInbound.message_id < item.message_id))).limit(1))
+        if older:
+            continue
+        item.status = "processing"
+        item.claim_token = secrets.token_hex(32)
+        item.claimed_at = now
+        item.attempts += 1
+        db.commit()
+        return {"message_id": item.message_id, "sender_id": item.sender_id,
+                "payload": item.payload, "claim_token": item.claim_token,
+                "attempts": item.attempts}
+    return None
+
+
+def _claimed_inbound(db: Session, message_id: str, body: WhatsAppInboundTransition,
+                     status: str) -> WhatsAppInbound:
+    item = db.get(WhatsAppInbound, message_id)
+    if not item or item.status != status or not item.claim_token or not secrets.compare_digest(item.claim_token, body.claim_token):
+        raise DomainError("INBOUND_CLAIM_LOST", "Message claim is no longer active.", 409)
+    return item
+
+
+@router.post("/inbound/{message_id}/sending")
+def inbound_sending(message_id: str, body: WhatsAppInboundTransition,
+                    _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    item = _claimed_inbound(db, message_id, body, "processing")
+    item.status = "sending"
+    db.commit()
+    return {"status": item.status}
+
+
+@router.post("/inbound/{message_id}/sent")
+def inbound_sent(message_id: str, body: WhatsAppInboundTransition,
+                 _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    item = _claimed_inbound(db, message_id, body, "sending")
+    item.status = "sent"
+    item.payload = {}
+    item.claim_token = None
+    db.commit()
+    return {"status": item.status}
+
+
+@router.post("/inbound/{message_id}/failed")
+def inbound_failed(message_id: str, body: WhatsAppInboundTransition,
+                   _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    item = db.get(WhatsAppInbound, message_id)
+    if not item or item.status not in ("processing", "sending") or not item.claim_token or not secrets.compare_digest(item.claim_token, body.claim_token):
+        raise DomainError("INBOUND_CLAIM_LOST", "Message claim is no longer active.", 409)
+    item.last_error = body.error
+    if item.status == "sending":
+        # Meta may have accepted the request before the worker lost the response.
+        # Never automatically retry an ambiguous outbound send.
+        item.status = "uncertain"
+        item.payload = {}
+    elif item.attempts >= 5:
+        item.status = "failed"
+        item.payload = {}
+    else:
+        item.status = "pending"
+        item.available_at = utcnow() + timedelta(seconds=min(300, 2 ** item.attempts * 5))
+    item.claim_token = None
+    db.commit()
+    return {"status": item.status}
+
+
+@router.get("/inbound/issues")
+def inbound_issues(limit: int = Query(50, ge=1, le=100),
+                   _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    rows = db.scalars(select(WhatsAppInbound).where(WhatsAppInbound.status.in_(("failed", "uncertain")))
+                      .order_by(WhatsAppInbound.created_at.desc()).limit(limit)).all()
+    return [{"message_id": item.message_id, "status": item.status, "attempts": item.attempts,
+             "created_at": item.created_at, "last_error": item.last_error} for item in rows]
+
+
 @router.get("/catalogue")
 def catalogue(_: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
     branches = db.scalars(select(Branch).where(Branch.is_active.is_(True)).order_by(Branch.name)).all()
@@ -118,7 +259,8 @@ def hold_create(body: WhatsAppHoldCreate, _: None = Depends(require_whatsapp_ser
     key = owner_key(body.sender_id)
     existing = db.scalar(select(Reservation).where(Reservation.idempotency_key == body.idempotency_key))
     if existing and (existing.owner_key != key or existing.doctor_id != body.doctor_id
-                     or existing.branch_id != body.branch_id or _utc(existing.starts_at) != _utc(body.starts_at)
+                     or existing.branch_id != body.branch_id or existing.consultation_type != body.consultation_type
+                     or _utc(existing.starts_at) != _utc(body.starts_at)
                      or _utc(existing.ends_at) != _utc(body.ends_at)):
         raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
     hold = create_hold(db, HoldCreate(**body.model_dump(exclude={"sender_id"}), owner_key=key))
@@ -147,7 +289,8 @@ def appointment_create(body: WhatsAppAppointmentCreate, _: None = Depends(requir
     key = owner_key(body.sender_id)
     existing = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
     if existing and (existing.reservation.owner_key != key or existing.reservation_id != body.hold_id
-                     or existing.patient_name != body.patient_name.strip()):
+                     or existing.patient_name != body.patient_name.strip()
+                     or existing.consent_to_reminders != body.consent_to_reminders):
         raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
     appointment = confirm_appointment(db, AppointmentCreate(
         hold_id=body.hold_id, owner_key=key, patient_name=body.patient_name,
@@ -165,6 +308,33 @@ def appointments(sender_id: str = Query(pattern=r"^[0-9]{7,20}$"), limit: int = 
         Appointment.origin_channel == "whatsapp", Reservation.owner_key == owner_key(sender_id))
         .order_by(Appointment.created_at.desc()).limit(limit)).all()
     return [_appointment_row(db, item) for item in items]
+
+
+@router.get("/appointments/page")
+def appointments_page(sender_id: str = Query(pattern=r"^[0-9]{7,20}$"),
+                      limit: int = Query(8, ge=1, le=20), offset: int = Query(0, ge=0, le=10000),
+                      _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    owner = owner_key(sender_id)
+    query = select(Appointment).join(Reservation).where(
+        Appointment.origin_channel == "whatsapp", Reservation.owner_key == owner)
+    total = db.scalar(select(func.count()).select_from(Appointment).join(Reservation).where(
+        Appointment.origin_channel == "whatsapp", Reservation.owner_key == owner)) or 0
+    items = db.scalars(query.order_by(Appointment.created_at.desc(), Appointment.id.desc())
+                       .offset(offset).limit(limit)).all()
+    return {"total": total, "items": [_appointment_row(db, item) for item in items]}
+
+
+@router.get("/appointments/by-code/{confirmation_code}", response_model=WhatsAppAppointmentOut)
+def appointment_by_code(confirmation_code: str, sender_id: str = Query(pattern=r"^[0-9]{7,20}$"),
+                        _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    if not re.fullmatch(r"AVO-[0-9A-F]{8}([0-9A-F]{8})?", confirmation_code):
+        raise DomainError("APPOINTMENT_NOT_FOUND", "Appointment was not found.", 404)
+    item = db.scalar(select(Appointment).join(Reservation).where(
+        Appointment.confirmation_code == confirmation_code,
+        Appointment.origin_channel == "whatsapp", Reservation.owner_key == owner_key(sender_id)))
+    if not item:
+        raise DomainError("APPOINTMENT_NOT_FOUND", "Appointment was not found.", 404)
+    return _appointment_row(db, item)
 
 
 @router.get("/appointments/{appointment_id}", response_model=WhatsAppAppointmentOut)
@@ -191,7 +361,9 @@ def appointment_reschedule(appointment_id: str, body: WhatsAppReschedule,
             raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
         return _appointment_row(db, _owned_appointment(db, appointment_id, body.sender_id))
     item = _owned_appointment(db, appointment_id, body.sender_id)
-    item = db.scalar(select(Appointment).where(Appointment.id == item.id).with_for_update())
+    # Appointment eagerly joins its reservation. PostgreSQL cannot lock the
+    # nullable side of that outer join; lock the appointment row explicitly.
+    item = db.scalar(select(Appointment).where(Appointment.id == item.id).with_for_update(of=Appointment))
     new_hold = db.scalar(select(Reservation).where(Reservation.id == body.new_hold_id).with_for_update())
     if not new_hold or new_hold.owner_key != key:
         raise DomainError("HOLD_NOT_FOUND", "The replacement slot hold was not found.", 404)
@@ -282,15 +454,23 @@ def asset_download(asset_id: str, _: None = Depends(require_whatsapp_service), d
 def reminders_due(limit: int = Query(20, ge=1, le=100), _: None = Depends(require_whatsapp_service),
                   db: Session = Depends(get_db)):
     now = utcnow()
+    stale = db.scalars(select(ReminderJob).where(
+        ReminderJob.status == "claimed", ReminderJob.claimed_at < now - timedelta(minutes=15))
+        .with_for_update(skip_locked=True)).all()
+    for job in stale:
+        job.status = "uncertain"
+        job.last_error = "Worker stopped after claiming reminder; delivery requires review"
+    if stale:
+        db.commit()
     jobs = db.scalars(select(ReminderJob).where(
         ReminderJob.due_at <= now, ReminderJob.attempts < 5,
-        or_(ReminderJob.status == "pending",
-            (ReminderJob.status == "claimed") & (ReminderJob.claimed_at < now - timedelta(minutes=5))))
+        ReminderJob.status == "pending")
         .order_by(ReminderJob.due_at).limit(limit).with_for_update(skip_locked=True)).all()
     result = []
     for job in jobs:
         appointment = db.get(Appointment, job.appointment_id)
-        if not appointment or appointment.status != "confirmed" or not appointment.consent_to_reminders:
+        if (not appointment or appointment.status != "confirmed" or not appointment.consent_to_reminders
+                or _utc(appointment.reservation.starts_at) <= now):
             job.status = "cancelled"
             continue
         doctor = db.get(Doctor, appointment.reservation.doctor_id)
@@ -313,15 +493,27 @@ def reminder_complete(job_id: str, body: ReminderComplete, _: None = Depends(req
     job = db.get(ReminderJob, job_id)
     if not job:
         raise DomainError("REMINDER_NOT_FOUND", "Reminder was not found.", 404)
-    if job.status in {"sent", "cancelled"}:
+    if job.status in {"sent", "cancelled", "uncertain"}:
         return {"id": job.id, "status": job.status}
     if job.status != "claimed":
         raise DomainError("REMINDER_NOT_CLAIMED", "Reminder is not claimed.", 409)
     if body.status == "sent":
         job.status = "sent"
+    elif body.status == "uncertain":
+        job.status = "uncertain"
+        job.last_error = body.error
     else:
         job.status = "failed" if job.attempts >= 5 else "pending"
         job.due_at = utcnow() + timedelta(minutes=5)
         job.last_error = body.error
     db.commit()
     return {"id": job.id, "status": job.status}
+
+
+@router.get("/reminders/issues")
+def reminder_issues(limit: int = Query(50, ge=1, le=100),
+                    _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    jobs = db.scalars(select(ReminderJob).where(ReminderJob.status.in_(("failed", "uncertain")))
+                      .order_by(ReminderJob.created_at.desc()).limit(limit)).all()
+    return [{"id": job.id, "status": job.status, "appointment_id": job.appointment_id,
+             "attempts": job.attempts, "last_error": job.last_error} for job in jobs]

@@ -4,13 +4,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .admin import require_admin
 from .db import get_db
 from .media import asset_row, media_path, save_upload
-from .models import CaseAttachment, Department, Doctor, MediaAsset, SupportCase
+from .models import CaseAttachment, Department, Doctor, MediaAsset, ReminderJob, SupportCase, WhatsAppInbound
 from .schemas import SupportCaseStatusUpdate
 from .services import DomainError
 
@@ -75,6 +75,25 @@ def cases(limit: int = 100, _: str = Depends(require_admin), db: Session = Depen
              "attachments": [{"id": attached.id, "asset": asset_row(db.get(MediaAsset, attached.asset_id))}
                              for attached in db.scalars(select(CaseAttachment).where(CaseAttachment.case_id == item.id)).all()]}
             for item in items]
+
+
+@router.get("/whatsapp-delivery-issues")
+def delivery_issues(_: str = Depends(require_admin), db: Session = Depends(get_db)):
+    inbound_counts = dict(db.execute(select(WhatsAppInbound.status, func.count()).group_by(WhatsAppInbound.status)).all())
+    reminder_counts = dict(db.execute(select(ReminderJob.status, func.count()).group_by(ReminderJob.status)).all())
+    inbound = db.scalars(select(WhatsAppInbound).where(WhatsAppInbound.status.in_(("failed", "uncertain")))
+                         .order_by(WhatsAppInbound.created_at.desc()).limit(100)).all()
+    reminders = db.scalars(select(ReminderJob).where(ReminderJob.status.in_(("failed", "uncertain")))
+                           .order_by(ReminderJob.created_at.desc()).limit(100)).all()
+    return {
+        "counts": {"inbound": inbound_counts, "reminders": reminder_counts},
+        "inbound": [{"message_id": item.message_id, "status": item.status,
+                     "created_at": item.created_at, "attempts": item.attempts}
+                    for item in inbound],
+        "reminders": [{"id": item.id, "appointment_id": item.appointment_id,
+                       "status": item.status, "attempts": item.attempts}
+                      for item in reminders],
+    }
 
 
 @router.patch("/whatsapp-cases/{case_id}")

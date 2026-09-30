@@ -19,13 +19,17 @@ from .services import DomainError
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if settings.app_env == "production" and settings.admin_api_key == "dev-admin-key":
-        raise RuntimeError("ADMIN_API_KEY must be changed in production")
-    if settings.app_env == "production" and settings.voice_service_api_key == "dev-voice-service-key":
-        raise RuntimeError("VOICE_SERVICE_API_KEY must be changed in production")
-    if settings.app_env == "production" and (settings.whatsapp_service_api_key == "dev-whatsapp-service-key"
-                                              or settings.whatsapp_owner_secret == "dev-whatsapp-owner-secret"):
-        raise RuntimeError("WhatsApp service key and owner secret must be changed in production")
+    if settings.app_env == "production":
+        for name in ("admin_api_key", "voice_service_api_key", "whatsapp_service_api_key", "whatsapp_owner_secret"):
+            value = getattr(settings, name)
+            if len(value) < 32 or value.startswith(("dev-", "replace-", "test-")):
+                raise RuntimeError(f"{name.upper()} must be a strong production secret")
+        if not settings.database_url.startswith("postgresql+"):
+            raise RuntimeError("Production requires PostgreSQL and completed migrations")
+        if not settings.media_dir.startswith("/"):
+            raise RuntimeError("MEDIA_DIR must be an absolute persistent directory in production")
+        if not settings.media_scan_socket or not settings.media_scan_socket.startswith("/"):
+            raise RuntimeError("MEDIA_SCAN_SOCKET must point to a private ClamAV Unix socket in production")
     if settings.app_env in {"development", "test"}:
         Base.metadata.create_all(engine)
         with SessionLocal() as db:
@@ -46,6 +50,10 @@ async def request_context(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api/v1/") or request.url.path == "/whatsapp-assets":
+        response.headers["Cache-Control"] = "no-store"
+    if request.url.path == "/whatsapp-assets":
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
     return response
 
 
