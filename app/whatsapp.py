@@ -361,7 +361,9 @@ def appointment_reschedule(appointment_id: str, body: WhatsAppReschedule,
             raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
         return _appointment_row(db, _owned_appointment(db, appointment_id, body.sender_id))
     item = _owned_appointment(db, appointment_id, body.sender_id)
-    item = db.scalar(select(Appointment).where(Appointment.id == item.id).with_for_update())
+    # Appointment eagerly joins its reservation. PostgreSQL cannot lock the
+    # nullable side of that outer join; lock the appointment row explicitly.
+    item = db.scalar(select(Appointment).where(Appointment.id == item.id).with_for_update(of=Appointment))
     new_hold = db.scalar(select(Reservation).where(Reservation.id == body.new_hold_id).with_for_update())
     if not new_hold or new_hold.owner_key != key:
         raise DomainError("HOLD_NOT_FOUND", "The replacement slot hold was not found.", 404)

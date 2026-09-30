@@ -44,6 +44,10 @@ jobs:
         run: |
           docker compose up -d --wait api
           npm --prefix whatsapp-bot run test:integration
+      - name: Start coupled development bot container
+        run: |
+          docker compose --profile whatsapp up -d --wait whatsapp
+          curl --fail http://127.0.0.1:8787/health/ready
       - name: Stop disposable services
         if: always()
         run: docker compose down --volumes

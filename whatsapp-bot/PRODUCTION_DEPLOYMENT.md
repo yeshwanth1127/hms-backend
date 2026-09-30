@@ -10,7 +10,7 @@ This repository is prepared for a clinic deployment; it has **not** been deploye
 4. Provide ClamAV on a **private Unix socket** as `MEDIA_SCAN_SOCKET`. Do not expose a clamd TCP port publicly. Set `StreamMaxLength` above 16 MB and keep its signature database updated. Both patient attachments and staff PDF/photo uploads fail closed if the scanner is unavailable. The socket must be accessible to the backend process.
 5. Store the Meta app secret, production system-user access token, webhook verify token, service key, and backend keys in the host's secret manager. Do not bake `.env` into images, commit it, or print it in logs. Restrict backend and media-storage access; back up PostgreSQL and media together.
 
-The bot image can be built from the repo root with `docker build -f whatsapp-bot/Dockerfile whatsapp-bot`. Mount a clinic-approved PNG/JPEG welcome image into the container; the bundled `welcome.png` is demo artwork and is rejected by the production guard. The image binds port 8787 inside the container. Docker was not available during local verification, so build and scan the image in CI before deployment.
+The bot image can be built from the repo root with `docker build -f whatsapp-bot/Dockerfile whatsapp-bot`. Mount a clinic-approved PNG/JPEG welcome image into the container; the bundled `welcome.png` is demo artwork and is rejected by the production guard. The image binds port 8787 inside the container. CI builds both images, exercises the booking and queue contract against disposable PostgreSQL, and starts the coupled development bot. Inspect the latest CI result and scan release images before deployment; these checks do not establish a production deployment or live Meta delivery.
 
 ## Configuration and preflight
 
