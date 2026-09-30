@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+test/
+scripts/
+doctors/
+README.md
+BACKEND_INTEGRATION.md
+PAYMENT_CHOICE_DESIGN.md
+payment-choice-preview.html

@@ -21,6 +21,39 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  whatsapp:
+    profiles: ["whatsapp"]
+    build: ./whatsapp-bot
+    env_file: ./whatsapp-bot/.env
+    environment:
+      NODE_ENV: development
+      WA_ENV: development
+      WA_MODE: backend
+      WA_CLINIC_READY: "false"
+      WA_LIVE_NUMBER_CONFIRMED: "false"
+      WA_BIND_HOST: 0.0.0.0
+      WA_LOCAL_PORT: "8787"
+      BACKEND_URL: http://api:8000
+      BACKEND_WHATSAPP_SERVICE_KEY: ${WHATSAPP_SERVICE_API_KEY:-dev-whatsapp-service-key}
+    command: ["node", "server.mjs"]
+    ports:
+      - "127.0.0.1:8787:8787"
+    depends_on:
+      api:
+        condition: service_healthy
+    stop_grace_period: 50s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
 
   postgres:
     image: postgres:17-alpine

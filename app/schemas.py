@@ -234,7 +234,7 @@ class SupportCaseStatusUpdate(BaseModel):
 
 
 class ReminderComplete(BaseModel):
-    status: Literal["sent", "failed"]
+    status: Literal["sent", "failed", "uncertain"]
     error: str | None = Field(default=None, max_length=240)
 
 
@@ -242,3 +242,14 @@ class WhatsAppConversationSave(BaseModel):
     state: dict
     last_message_id: str = Field(min_length=8, max_length=120)
     last_reply: dict
+
+
+class WhatsAppInboundCreate(BaseModel):
+    message_id: str = Field(min_length=8, max_length=120)
+    sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
+    payload: dict
+
+
+class WhatsAppInboundTransition(BaseModel):
+    claim_token: str = Field(min_length=32, max_length=64)
+    error: str | None = Field(default=None, max_length=240)

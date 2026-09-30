@@ -217,6 +217,20 @@ class WhatsAppConversation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class WhatsAppInbound(Base):
+    __tablename__ = "whatsapp_inbound"
+    message_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    sender_id: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    last_error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
 class VoiceSession(Base):
     """Operational voice metadata owned by Core API; audio remains in the voice runtime."""
     __tablename__ = "voice_sessions"

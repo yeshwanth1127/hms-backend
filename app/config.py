@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     whatsapp_service_api_key: str = "dev-whatsapp-service-key"
     whatsapp_owner_secret: str = "dev-whatsapp-owner-secret"
     media_dir: str = "./uploads"
+    media_scan_socket: str | None = None
 
     @property
     def origins(self) -> list[str]:

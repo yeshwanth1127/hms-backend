@@ -135,7 +135,7 @@ def confirm_appointment(db: Session, body: AppointmentCreate) -> Appointment:
             db.commit()
         raise DomainError("HOLD_EXPIRED", "The slot hold has expired. Please select a new time.", 409)
     appointment = Appointment(
-        confirmation_code=f"AVO-{secrets.token_hex(4).upper()}", reservation_id=hold.id,
+        confirmation_code=f"AVO-{secrets.token_hex(8).upper()}", reservation_id=hold.id,
         patient_name=body.patient_name.strip(), patient_phone=body.patient_phone.strip(),
         patient_email=str(body.patient_email) if body.patient_email else None,
         reason=body.reason.strip() if body.reason else None, origin_channel=body.origin_channel,
