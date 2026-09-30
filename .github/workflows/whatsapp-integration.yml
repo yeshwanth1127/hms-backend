@@ -46,6 +46,7 @@ jobs:
           npm --prefix whatsapp-bot run test:integration
       - name: Start coupled development bot container
         run: |
+          python -c "from pathlib import Path; p = Path('whatsapp-bot/.env'); p.write_text(p.read_text().replace('replace-with-meta-phone-number-id', '123456789').replace('replace-with-version-from-meta-dashboard', 'v24.0'))"
           docker compose --profile whatsapp up -d --wait whatsapp
           curl --fail http://127.0.0.1:8787/health/ready
       - name: Stop disposable services
