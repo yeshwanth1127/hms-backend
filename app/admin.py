@@ -1,6 +1,7 @@
 import secrets
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import or_, select
@@ -97,16 +98,27 @@ def analytics(_: str = Depends(require_admin), db: Session = Depends(get_db)):
 
 @router.get("/appointments")
 def appointments(status: str | None = None, query: str | None = None,
+                 day: date | None = None, doctor_id: str | None = None,
+                 branch_id: str | None = None, offset: int = Query(0, ge=0),
                  limit: int = Query(100, ge=1, le=500), _: str = Depends(require_admin),
                  db: Session = Depends(get_db)):
-    statement = select(Appointment).order_by(Appointment.created_at.desc()).limit(limit)
+    statement = select(Appointment).join(Reservation, Appointment.reservation_id == Reservation.id).join(Doctor, Reservation.doctor_id == Doctor.id)
+    if day:
+        start = datetime.combine(day, datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata"))
+        statement = statement.where(Reservation.starts_at >= start.astimezone(timezone.utc),
+                                    Reservation.starts_at < (start + timedelta(days=1)).astimezone(timezone.utc))
+    if doctor_id:
+        statement = statement.where(Reservation.doctor_id == doctor_id)
+    if branch_id:
+        statement = statement.where(Reservation.branch_id == branch_id)
     if status and status != "all":
         statement = statement.where(Appointment.status == status)
-    if query:
+    if query and query.strip():
         pattern = f"%{query.strip()}%"
         statement = statement.where(or_(Appointment.patient_name.ilike(pattern),
                                         Appointment.patient_phone.ilike(pattern),
-                                        Appointment.confirmation_code.ilike(pattern)))
+                                        Appointment.confirmation_code.ilike(pattern), Doctor.name.ilike(pattern)))
+    statement = statement.order_by(Reservation.starts_at, Appointment.id).offset(offset).limit(limit)
     return [_appointment_row(db, item) for item in db.scalars(statement).all()]
 
 

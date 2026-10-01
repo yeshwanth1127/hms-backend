@@ -26,7 +26,7 @@ Provider failures, denied keys and malformed responses show unavailable rather t
 
 ## Frontend lifecycle follow-up
 
-In brave-mendel, saved consent now initializes on the first tracked event after reload. Revocation silences captures; re-grant clears persisted SDK opt-out without double initialization. Explicit VITE_POSTHOG_ENABLED is required in all environments. These changes are locally tested and separate from the backend PR. No live PostHog credentials or SDK transport were used during testing.
+In brave-mendel, saved consent now initializes on the first tracked event after reload. Revocation silences captures; re-grant clears persisted SDK opt-out without double initialization. Explicit VITE_POSTHOG_ENABLED is required in all environments. These changes are tested and pushed to the website repository main branch in commit `3d155a9`; they are separate from the backend PR. No live PostHog credentials or SDK transport were used during testing.
 
 ## Verification
 
