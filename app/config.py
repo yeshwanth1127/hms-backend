@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pydantic import field_validator
 
 from pydantic import SecretStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -38,6 +39,12 @@ class Settings(BaseSettings):
     sarvam_app_id: str = ""
     sarvam_app_version: int | None = None
     sarvam_agent_display_name: str = "Aanya"
+
+    @field_validator("sarvam_app_version", mode="before")
+    @classmethod
+    def empty_sarvam_version(cls, value):
+        # An unconfigured optional version is blank in the deployment example.
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def origins(self) -> list[str]:
