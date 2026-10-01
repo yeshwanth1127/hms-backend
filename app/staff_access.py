@@ -7,9 +7,9 @@ from .staff_auth import require_staff
 from .services import DomainError
 
 ROLES = {
-    "admin": frozenset({"growth.read", "google.manage", "growth.audit.read"}),
+    "admin": frozenset({"growth.read", "google.manage", "growth.audit.read", "voice.read", "voice.manage", "voice.recordings"}),
     "growth_manager": frozenset({"growth.read", "google.manage", "growth.audit.read"}),
-    "staff": frozenset(),
+    "staff": frozenset({"voice.read"}),
 }
 authenticated_staff = require_staff
 

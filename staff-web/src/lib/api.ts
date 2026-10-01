@@ -86,6 +86,7 @@ export type Branch = {
   name: string;
   area: string;
   is_active: boolean;
+  is_virtual?: boolean;
   address: string;
   directions_url: string;
   arrival_instructions: string;
@@ -190,4 +191,24 @@ export function usable(t: Template) {
     !!t.spec &&
     Date.now() - new Date(t.synced_at).getTime() < 7200000
   );
+}
+
+export async function recordingBlob(path: string): Promise<Blob> {
+  const response = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    redirect: "error",
+    cache: "no-store",
+    headers: { "X-CSRF-Token": csrf },
+  });
+  if (!response.ok) {
+    if (response.status === 401)
+      window.dispatchEvent(new Event("staff-signout"));
+    const data = await response.json().catch(() => null);
+    throw new ApiError(
+      data?.error?.message ?? "The recording could not be opened.",
+      response.status,
+    );
+  }
+  return response.blob();
 }

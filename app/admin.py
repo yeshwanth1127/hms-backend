@@ -87,7 +87,7 @@ def analytics(_: str = Depends(require_admin), db: Session = Depends(get_db)):
             "pending_notifications": len(pending_outbox),
             "conversion_rate": round((confirmed / len(appointments) * 100) if appointments else 0, 1),
             "voice_sessions_total": len(voice_sessions),
-            "voice_bookings": sum(1 for item in appointments if item.origin_channel == "voice"),
+            "voice_bookings": sum(1 for item in appointments if item.origin_channel in {"voice", "web_voice", "phone"}),
         },
         "by_status": [{"label": key, "value": value} for key, value in sorted(by_status.items())],
         "by_channel": [{"label": key, "value": value} for key, value in sorted(by_channel.items())],
@@ -215,7 +215,7 @@ def delete_schedule(schedule_id: str, _: str = Depends(require_admin), db: Sessi
 @router.get("/catalogue")
 def catalogue(_: str = Depends(require_admin), db: Session = Depends(get_db)):
     return {
-        "branches": [{"id": item.id, "name": item.name, "area": item.area, "is_active": item.is_active, "address": item.address, "directions_url": item.directions_url, "arrival_instructions": item.arrival_instructions}
+        "branches": [{"id": item.id, "name": item.name, "area": item.area, "is_active": item.is_active, "is_virtual": item.is_virtual, "address": item.address, "directions_url": item.directions_url, "arrival_instructions": item.arrival_instructions}
                      for item in db.scalars(select(Branch).order_by(Branch.name)).all()],
         "departments": [{"id": item.id, "name": item.name, "slug": item.slug, "is_active": item.is_active}
                         for item in db.scalars(select(Department).order_by(Department.name)).all()],
@@ -224,7 +224,7 @@ def catalogue(_: str = Depends(require_admin), db: Session = Depends(get_db)):
 
 @router.get("/operations")
 def operations(_: str = Depends(require_admin), db: Session = Depends(get_db)):
-    events = db.scalars(select(OutboxEvent).order_by(OutboxEvent.created_at.desc()).limit(100)).all()
+    events = db.scalars(select(OutboxEvent).where(OutboxEvent.event_type != "demo.website_activity").order_by(OutboxEvent.created_at.desc()).limit(100)).all()
     return [{"id": item.id, "event_type": item.event_type, "aggregate_id": item.aggregate_id,
              "created_at": item.created_at, "processed_at": item.processed_at,
              "status": "delivered" if item.processed_at else "pending"} for item in events]
@@ -233,6 +233,8 @@ def operations(_: str = Depends(require_admin), db: Session = Depends(get_db)):
 @router.get("/voice-sessions")
 def voice_sessions(limit: int = Query(100, ge=1, le=500), _: str = Depends(require_admin),
                    db: Session = Depends(get_db)):
+    from .client_modules import ensure_module
+    ensure_module(db, "voice")
     items = db.scalars(select(VoiceSession).order_by(VoiceSession.started_at.desc()).limit(limit)).all()
     return [{
         "id": item.id, "runtime_session_id": item.runtime_session_id, "status": item.status,

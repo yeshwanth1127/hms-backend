@@ -20,6 +20,10 @@ import {
   Stethoscope,
   BookOpen,
   LoaderCircle,
+  Headphones,
+  LayoutDashboard,
+  Building2,
+  Activity,
 } from "lucide-react";
 import { api, setSession, type Session, type StaffUser } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -46,6 +50,8 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+
+import { DemoControls } from "@/modules/DemoControls";
 
 function NavigationButton({
   onClick,
@@ -80,15 +86,27 @@ const SettingsModule = lazy(() =>
   import("@/modules/settings").then((m) => ({ default: m.SettingsModule })),
 );
 
+const VoiceModule = lazy(() =>
+  import("@/modules/voice").then((m) => ({ default: m.VoiceModule })),
+);
+
+const OperationsModule = lazy(() =>
+  import("@/modules/operations").then((m) => ({ default: m.OperationsModule })),
+);
+
 function route() {
   const parts = location.pathname.split("/").filter(Boolean);
   return { module: parts[1] ?? "whatsapp", page: parts[2] ?? "overview" };
 }
 const clinicNav = [
+  { key: "overview", name: "Overview", icon: LayoutDashboard },
   { key: "appointments", name: "Appointments", icon: CalendarDays },
   { key: "doctors", name: "Doctors", icon: Stethoscope },
   { key: "schedules", name: "Schedules", icon: Clock3 },
   { key: "whatsapp", name: "WhatsApp", icon: MessageCircle },
+  { key: "voice", name: "Voice", icon: Headphones },
+  { key: "catalogue", name: "Hospital catalogue", icon: Building2 },
+  { key: "operations", name: "Operations", icon: Activity },
 ];
 function Brand() {
   return (
@@ -303,7 +321,7 @@ export default function App() {
   const navigation = clinicNav.filter(
     (n) =>
       user.role !== "growth_manager" &&
-      (n.key !== "whatsapp" || available("whatsapp")),
+      (!["whatsapp", "voice"].includes(n.key) || available(n.key)),
   );
   const growthNavigation = [
     { key: "google_business", name: "Google Business", icon: Globe },
@@ -314,7 +332,7 @@ export default function App() {
     },
   ].filter((n) => available(n.key));
   const moduleAllowed =
-    !["whatsapp", "google_business", "growth_analytics"].includes(
+    !["whatsapp", "voice", "google_business", "growth_analytics"].includes(
       current.module,
     ) || available(current.module);
   const title =
@@ -446,12 +464,17 @@ export default function App() {
               <span className="text-xs font-medium">{title}</span>
             </div>
             <Badge variant="outline" className="font-normal">
-              {environment && environment !== "production"
-                ? "Development workspace"
-                : "Staff workspace"}
+              {environment === "demo"
+                ? "Demo workspace"
+                : environment && environment !== "production"
+                  ? "Development workspace"
+                  : "Staff workspace"}
             </Badge>
           </header>
           <section className="workspace-content" id="main-content">
+            {environment === "demo" && (
+              <DemoControls canManage={user.role === "admin"} />
+            )}
             {logoutError && (
               <Notice title="Sign-out failed" text={logoutError} />
             )}{" "}
@@ -494,6 +517,7 @@ export default function App() {
                 ) ? (
                 <GrowthModule
                   key={current.module}
+                  demo={environment === "demo"}
                   api={api}
                   user={user}
                   page={current.page}
@@ -502,6 +526,12 @@ export default function App() {
                     current.module as "google_business" | "growth_analytics"
                   }
                 />
+              ) : ["overview", "catalogue", "operations"].includes(
+                  current.module,
+                ) && user.role !== "growth_manager" ? (
+                <OperationsModule key={current.module} page={current.module} />
+              ) : current.module === "voice" ? (
+                <VoiceModule demo={environment === "demo"} />
               ) : current.module === "whatsapp" ? (
                 <WhatsAppModule
                   user={user}

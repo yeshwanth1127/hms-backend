@@ -1,12 +1,7 @@
+import { NurseDesk } from "./NurseDesk";
 import { useState } from "react";
-import { CalendarDays, Plus, Search } from "lucide-react";
-import {
-  api,
-  dateTime,
-  type Appointment,
-  type Catalogue,
-  type StaffUser,
-} from "@/lib/api";
+import { CalendarDays, Plus } from "lucide-react";
+import { api, type Catalogue, type StaffUser } from "@/lib/api";
 import {
   Action,
   Choice,
@@ -53,6 +48,9 @@ type Schedule = {
   doctor_id: string;
   branch_id: string;
   schedule_date: string;
+  weekday: number;
+  effective_until?: string | null;
+  is_active: boolean;
   starts_at_local: string;
   ends_at_local: string;
   slot_minutes: number;
@@ -68,191 +66,23 @@ export function ClinicModule({ module }: { module: string; user: StaffUser }) {
   );
 }
 function Appointments() {
-  const [query, setQuery] = useState(""),
-    [filter, setFilter] = useState("all"),
-    [submitted, setSubmitted] = useState(""),
-    [change, setChange] = useState<{
-      visit: Appointment;
-      status: string;
-    } | null>(null),
-    [reason, setReason] = useState("");
-  const r = useResource<Appointment[]>(
-    `/api/v1/admin/appointments?status=${filter}&query=${encodeURIComponent(submitted)}`,
-  );
+  const doctors = useResource<Doctor[]>("/api/v1/admin/doctors");
+  const catalogue = useResource<Catalogue>("/api/v1/admin/catalogue");
   return (
-    <>
-      <PageTitle
-        title="Appointments"
-        description="Manage visits from WhatsApp, the website and voice in the same clinic records."
+    <Resource
+      loading={doctors.loading || catalogue.loading}
+      error={doctors.error || catalogue.error}
+      refresh={() => {
+        doctors.refresh();
+        catalogue.refresh();
+      }}
+    >
+      <NurseDesk
+        api={api}
+        doctors={doctors.data ?? []}
+        branches={catalogue.data?.branches ?? []}
       />
-      <form
-        className="flex flex-wrap gap-4 mb-6 items-end"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setSubmitted(query);
-        }}
-      >
-        <div className="flex-1 max-w-sm relative">
-          <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
-          <Input
-            aria-label="Search appointments"
-            className="pl-9"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Patient, phone or booking reference…"
-          />
-        </div>
-        <Button variant="outline" type="submit">
-          Search
-        </Button>
-        <div className="w-44">
-          <Choice
-            label="Status"
-            value={filter}
-            onChange={setFilter}
-            options={[
-              "all",
-              "confirmed",
-              "checked_in",
-              "completed",
-              "no_show",
-              "cancelled",
-            ].map((v) => [
-              v,
-              v.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase()),
-            ])}
-          />
-        </div>
-      </form>
-      <Resource {...r}>
-        {r.data?.length ? (
-          <Card className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Patient</TableHead>
-                  <TableHead>Visit</TableHead>
-                  <TableHead>Doctor & clinic</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {r.data.map((a) => (
-                  <TableRow key={a.id}>
-                    <TableCell>
-                      <p className="font-medium">{a.patient_name}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {a.confirmation_code} · {a.patient_phone}
-                      </p>
-                    </TableCell>
-                    <TableCell>{dateTime(a.starts_at)}</TableCell>
-                    <TableCell>
-                      {a.doctor?.name}
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {a.branch?.name}
-                      </p>
-                    </TableCell>
-                    <TableCell>
-                      <StateBadge value={a.origin_channel} />
-                    </TableCell>
-                    <TableCell>
-                      <StateBadge value={a.status} />
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-2">
-                        {(a.status === "confirmed"
-                          ? ["checked_in", "no_show", "cancelled"]
-                          : a.status === "checked_in"
-                            ? ["completed", "cancelled"]
-                            : []
-                        ).map((status) => (
-                          <Button
-                            key={status}
-                            variant="outline"
-                            disabled={
-                              ["completed", "no_show"].includes(status) &&
-                              new Date(a.starts_at) > new Date()
-                            }
-                            onClick={() => {
-                              setChange({ visit: a, status });
-                              setReason("");
-                            }}
-                          >
-                            {
-                              (
-                                {
-                                  checked_in: "Check in",
-                                  no_show: "No-show",
-                                  cancelled: "Cancel",
-                                  completed: "Complete",
-                                } as Record<string, string>
-                              )[status]
-                            }
-                          </Button>
-                        ))}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Card>
-        ) : (
-          <Empty
-            title="No matching appointments"
-            description="Try another patient or status. New confirmed bookings appear here automatically."
-          />
-        )}
-      </Resource>
-      <Dialog
-        open={!!change}
-        onOpenChange={(v) => {
-          if (!v) setChange(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Update this appointment?</DialogTitle>
-            <DialogDescription>
-              {change?.visit.patient_name} · {change?.visit.confirmation_code}
-              <br />
-              {change && dateTime(change.visit.starts_at)}
-            </DialogDescription>
-          </DialogHeader>
-          <p className="text-sm">
-            New status: <StateBadge value={change?.status ?? ""} />
-          </p>
-          <Field label="Reason" id="status-reason">
-            <Input
-              id="status-reason"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              maxLength={240}
-              placeholder="Optional note for the clinic record"
-            />
-          </Field>
-          <p className="text-xs text-muted-foreground">
-            Completed and no-show statuses can trigger configured follow-ups.
-            Cancellation releases the appointment slot.
-          </p>
-          <Action
-            run={async () => {
-              await api(
-                `/api/v1/admin/appointments/${change!.visit.id}/status`,
-                { method: "PATCH", body: { status: change!.status, reason } },
-              );
-              setChange(null);
-              r.refresh();
-            }}
-            success="Appointment updated"
-          >
-            Confirm status change
-          </Action>
-        </DialogContent>
-      </Dialog>
-    </>
+    </Resource>
   );
 }
 function Doctors() {
@@ -270,7 +100,7 @@ function Doctors() {
             <TableHeader>
               <TableRow>
                 <TableHead>Doctor</TableHead>
-                <TableHead>Specialties</TableHead>
+                <TableHead>Specialties & clinics</TableHead>
                 <TableHead>Fee</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Action</TableHead>
@@ -287,6 +117,9 @@ function Doctors() {
                   </TableCell>
                   <TableCell className="whitespace-normal">
                     {d.departments.map((d) => d.name).join(", ")}
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {d.branches.map((b) => b.name).join(", ")}
+                    </p>
                   </TableCell>
                   <TableCell>
                     ₹{d.consultation_fee.toLocaleString("en-IN")}
@@ -389,6 +222,9 @@ function Schedules() {
     catalogue = useResource<Catalogue>("/api/v1/admin/catalogue"),
     [open, setOpen] = useState(false),
     [doctor, setDoctor] = useState(""),
+    [doctorFilter, setDoctorFilter] = useState("all"),
+    [visitType, setVisitType] = useState("in_person"),
+    [weekday, setWeekday] = useState("0"),
     [branch, setBranch] = useState(""),
     [date, setDate] = useState(""),
     [endDate, setEndDate] = useState(""),
@@ -399,7 +235,11 @@ function Schedules() {
   const chosen = doctors.data?.find((d) => d.id === doctor),
     branches =
       catalogue.data?.branches.filter(
-        (b) => b.is_active && chosen?.branches.some((c) => c.id === b.id),
+        (b) =>
+          b.is_active &&
+          (visitType === "virtual"
+            ? b.is_virtual && chosen?.accepts_virtual
+            : !b.is_virtual && chosen?.branches.some((c) => c.id === b.id)),
       ) ?? [];
   return (
     <>
@@ -413,8 +253,28 @@ function Schedules() {
           </Button>
         }
       />
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
+        <div className="w-64">
+          <Choice
+            label="Filter schedules by doctor"
+            value={doctorFilter}
+            onChange={setDoctorFilter}
+            options={[
+              ["all", "All doctors"],
+              ...(doctors.data ?? []).map(
+                (d) => [d.id, d.name] as [string, string],
+              ),
+            ]}
+          />
+        </div>
+        <Button variant="outline" onClick={r.refresh}>
+          Refresh schedules
+        </Button>
+      </div>
       <Resource {...r}>
-        {r.data?.length ? (
+        {r.data?.some(
+          (s) => doctorFilter === "all" || s.doctor_id === doctorFilter,
+        ) ? (
           <Card className="p-0">
             <Table>
               <TableHeader>
@@ -422,36 +282,63 @@ function Schedules() {
                   <TableHead>Doctor</TableHead>
                   <TableHead>Clinic</TableHead>
                   <TableHead>Weekly from</TableHead>
+                  <TableHead>Visit type</TableHead>
                   <TableHead>Hours</TableHead>
                   <TableHead>Slot duration</TableHead>
                   <TableHead>Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {r.data.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell>
-                      {doctors.data?.find((d) => d.id === s.doctor_id)?.name ??
-                        "Loading doctor…"}
-                    </TableCell>
-                    <TableCell>
-                      {catalogue.data?.branches.find(
-                        (b) => b.id === s.branch_id,
-                      )?.name ?? "Loading clinic…"}
-                    </TableCell>
-                    <TableCell>{s.schedule_date}</TableCell>
-                    <TableCell>
-                      {s.starts_at_local.slice(0, 5)}–
-                      {s.ends_at_local.slice(0, 5)}
-                    </TableCell>
-                    <TableCell>{s.slot_minutes} minutes</TableCell>
-                    <TableCell>
-                      <Button variant="outline" onClick={() => setRemove(s)}>
-                        Remove rule
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {r.data
+                  ?.filter(
+                    (s) =>
+                      doctorFilter === "all" || s.doctor_id === doctorFilter,
+                  )
+                  .map((s) => (
+                    <TableRow key={s.id}>
+                      <TableCell>
+                        {doctors.data?.find((d) => d.id === s.doctor_id)
+                          ?.name ?? "Loading doctor…"}
+                      </TableCell>
+                      <TableCell>
+                        {catalogue.data?.branches.find(
+                          (b) => b.id === s.branch_id,
+                        )?.name ?? "Loading clinic…"}
+                      </TableCell>
+                      <TableCell>
+                        {
+                          [
+                            "Monday",
+                            "Tuesday",
+                            "Wednesday",
+                            "Thursday",
+                            "Friday",
+                            "Saturday",
+                            "Sunday",
+                          ][s.weekday]
+                        }
+                        <p className="text-xs text-muted-foreground">
+                          {s.schedule_date}
+                          {s.effective_until
+                            ? ` – ${s.effective_until}`
+                            : " · ongoing"}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <StateBadge value={s.consultation_type} />
+                      </TableCell>
+                      <TableCell>
+                        {s.starts_at_local.slice(0, 5)}–
+                        {s.ends_at_local.slice(0, 5)}
+                      </TableCell>
+                      <TableCell>{s.slot_minutes} minutes</TableCell>
+                      <TableCell>
+                        <Button variant="outline" onClick={() => setRemove(s)}>
+                          Remove rule
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
               </TableBody>
             </Table>
           </Card>
@@ -467,8 +354,8 @@ function Schedules() {
           <DialogHeader>
             <DialogTitle>Add weekly schedule</DialogTitle>
             <DialogDescription>
-              Times use the selected clinic’s timezone. The first date
-              determines the recurring weekday.
+              Times use the selected clinic’s timezone. The first date begins
+              the weekly rule on the selected weekday.
             </DialogDescription>
           </DialogHeader>
           <Resource
@@ -485,6 +372,7 @@ function Schedules() {
                 value={doctor}
                 onChange={(v) => {
                   setDoctor(v);
+                  setVisitType("in_person");
                   setBranch("");
                 }}
                 options={[
@@ -495,6 +383,34 @@ function Schedules() {
                 ]}
               />
               <Choice
+                label="Visit type"
+                value={visitType}
+                onChange={(v) => {
+                  setVisitType(v);
+                  setBranch("");
+                }}
+                options={[
+                  ["in_person", "In person"],
+                  ...(chosen?.accepts_virtual
+                    ? [["virtual", "Virtual consultation"] as [string, string]]
+                    : []),
+                ]}
+              />
+              <Choice
+                label="Recurring weekday"
+                value={weekday}
+                onChange={setWeekday}
+                options={[
+                  "Monday",
+                  "Tuesday",
+                  "Wednesday",
+                  "Thursday",
+                  "Friday",
+                  "Saturday",
+                  "Sunday",
+                ].map((d, i) => [String(i), d])}
+              />
+              <Choice
                 label="Clinic"
                 value={branch}
                 onChange={setBranch}
@@ -503,7 +419,7 @@ function Schedules() {
                   ...branches.map((b) => [b.id, b.name] as [string, string]),
                 ]}
               />
-              <Field label="First date" id="schedule-date">
+              <Field label="Effective from" id="schedule-date">
                 <Input
                   type="date"
                   id="schedule-date"
@@ -556,12 +472,13 @@ function Schedules() {
                     body: {
                       doctor_id: doctor,
                       branch_id: branch,
-                      schedule_date: date,
+                      effective_from: date,
+                      weekday: Number(weekday),
                       effective_until: endDate || null,
                       starts_at_local: start,
                       ends_at_local: end,
                       slot_minutes: minutes,
-                      consultation_type: "in_person",
+                      consultation_type: visitType,
                     },
                   });
                   setOpen(false);

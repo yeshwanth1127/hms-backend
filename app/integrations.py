@@ -14,13 +14,24 @@ from .schemas import (
     VoiceSessionCreate, VoiceSessionEnd, VoiceSessionEvent,
 )
 from .services import DomainError, availability, confirm_appointment, create_hold
+from .client_modules import ensure_module
+from .voice.operations import session_for_owner, bind_start, receipt
+from .voice.admission import gate
+from .staff_auth import utc
 
 router = APIRouter(prefix="/api/v1/integrations/voice", tags=["voice-integration"])
 
 
-def require_voice_service(x_service_key: str = Header(alias="X-Service-Key")) -> str:
+def require_voice_runtime(x_service_key: str = Header(alias="X-Service-Key")) -> str:
+    from .demo import block_transport
+    block_transport()
     if not secrets.compare_digest(x_service_key, settings.voice_service_api_key):
         raise DomainError("SERVICE_AUTH_REQUIRED", "A valid voice service credential is required.", 401)
+    return "voice-runtime"
+
+
+def require_voice_service(_=Depends(require_voice_runtime), db: Session = Depends(get_db)):
+    ensure_module(db, "voice")
     return "voice-runtime"
 
 
@@ -70,7 +81,6 @@ def list_branches(_: str = Depends(require_voice_service), db: Session = Depends
 def doctors(department: str | None = None, branch: str | None = None,
             _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
     items = db.scalars(select(Doctor).where(Doctor.is_active.is_(True)).order_by(Doctor.name)).unique().all()
-    all_items = items
     department = (department or "").strip() or None
     branch = (branch or "").strip() or None
     if department:
@@ -78,9 +88,7 @@ def doctors(department: str | None = None, branch: str | None = None,
         filtered = [item for item in items if any(
             _department_match(needle, value.name, value.slug) for value in item.departments
         )]
-        # Soft fallback: unknown colloquial phrases return the full list so the
-        # agent can still offer options instead of failing the call.
-        items = filtered or all_items
+        items = filtered
     active_rules = db.scalars(select(ScheduleRule).where(
         ScheduleRule.is_active.is_(True),
         or_(ScheduleRule.effective_until.is_(None), ScheduleRule.effective_until >= date.today()),
@@ -118,9 +126,9 @@ def doctors(department: str | None = None, branch: str | None = None,
         needle = branch.casefold()
         filtered = [item for item in result if any(
             needle in value.name.casefold() or needle in value.area.casefold() or needle == value.slug.casefold()
-            for value in item.branches
+            for value in [*item.branches, *item.virtual_branches]
         )]
-        result = filtered or result
+        result = filtered
     return VoiceDoctorsResponse(doctors=result, count=len(result))
 
 
@@ -138,6 +146,8 @@ def get_availability(doctor_id: str, branch_id: str, start_date: date, end_date:
 
 @router.post("/slot-holds", response_model=HoldOut, status_code=201)
 def hold_create(body: HoldCreate, _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
+    gate(db)
+    session_for_owner(db, body.owner_key)
     return create_hold(db, body)
 
 
@@ -156,12 +166,27 @@ def appointment_create(body: AppointmentCreate, _: str = Depends(require_voice_s
                        db: Session = Depends(get_db)):
     if body.origin_channel != "voice":
         body = body.model_copy(update={"origin_channel": "voice"})
-    return confirm_appointment(db, body)
+    gate(db)
+    replay = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
+    session = session_for_owner(db, body.owner_key, allow_finished=bool(replay))
+    if replay and (replay.reservation.owner_key != body.owner_key or replay.reservation_id != body.hold_id):
+        raise DomainError("VOICE_BOOKING_CONFLICT", "This booking key belongs to a different request.", 409)
+    if session.appointment_id and not replay:
+        raise DomainError("VOICE_BOOKING_EXISTS", "This call already created a booking. Start a new call for another appointment.", 409)
+    # Booking and call correlation commit together.
+    item = confirm_appointment(db, body, commit=False)
+    if session.appointment_id != item.id:
+        session.appointment_id = item.id
+        session.tool_call_count += 1
+        session.last_intent = 'confirm_appointment'
+        db.add(VoiceToolCall(voice_session_id=session.id, tool_name='confirm_appointment', outcome='success', appointment_id=item.id))
+    db.commit(); db.refresh(item)
+    return item
 
 
 @router.get("/appointments", response_model=VoiceAppointmentsResponse)
 def appointment_lookup(patient_phone: str = Query(min_length=7, max_length=32),
-                       confirmation_code: str | None = Query(default=None, min_length=4, max_length=20),
+                       confirmation_code: str = Query(min_length=4, max_length=20),
                        limit: int = Query(default=10, ge=1, le=25),
                        _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
     """Look up a caller's appointments without exposing an unfiltered patient list."""
@@ -176,35 +201,38 @@ def appointment_lookup(patient_phone: str = Query(min_length=7, max_length=32),
             Appointment.confirmation_code == confirmation_code.strip().upper()
         )
     items = list(db.scalars(statement).unique().all())
-    return VoiceAppointmentsResponse(appointments=items, count=len(items))
+    return VoiceAppointmentsResponse(appointments=[{
+        'id': a.id, 'confirmation_code': a.confirmation_code, 'status': a.status,
+        'starts_at': a.reservation.starts_at, 'ends_at': a.reservation.ends_at,
+        'doctor_name': db.get(Doctor, a.reservation.doctor_id).name, 'branch_name': db.get(Branch, a.reservation.branch_id).name,
+        'consultation_type': a.reservation.consultation_type,
+    } for a in items], count=len(items))
 
 
 @router.post("/sessions", status_code=201)
 def session_start(body: VoiceSessionCreate, _: str = Depends(require_voice_service),
                   db: Session = Depends(get_db)):
-    existing = db.scalar(select(VoiceSession).where(VoiceSession.runtime_session_id == body.runtime_session_id))
-    if existing:
-        return _session_row(existing)
-    item = VoiceSession(runtime_session_id=body.runtime_session_id, channel=body.channel)
-    db.add(item)
-    db.commit()
-    db.refresh(item)
-    return _session_row(item)
+    return _session_row(bind_start(db, body))
 
 
 @router.post("/sessions/{runtime_session_id}/events", status_code=201)
 def session_event(runtime_session_id: str, body: VoiceSessionEvent,
-                  _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
+                  _: str = Depends(require_voice_runtime), db: Session = Depends(get_db)):
     item = db.scalar(select(VoiceSession).where(VoiceSession.runtime_session_id == runtime_session_id))
     if not item:
         raise DomainError("VOICE_SESSION_NOT_FOUND", "Voice session was not found.", 404)
+    if not receipt(db, item, body.event_id, body.model_dump()):
+        return _session_row(item)
+    # Reload after serialized receipt processing, preserving terminal status.
+    db.refresh(item)
     if body.kind == "turn":
         item.turn_count += 1
     else:
         item.tool_call_count += 1
     item.last_intent = body.intent or body.tool_name
     if body.appointment_id:
-        if not db.get(Appointment, body.appointment_id):
+        appointment = db.get(Appointment, body.appointment_id)
+        if not appointment or appointment.reservation.owner_key != 'voice:' + item.runtime_session_id:
             raise DomainError("APPOINTMENT_NOT_FOUND", "Appointment was not found.", 404)
         item.appointment_id = body.appointment_id
     if body.kind == "tool":
@@ -216,12 +244,18 @@ def session_event(runtime_session_id: str, body: VoiceSessionEvent,
 
 @router.patch("/sessions/{runtime_session_id}")
 def session_end(runtime_session_id: str, body: VoiceSessionEnd,
-                _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
+                _: str = Depends(require_voice_runtime), db: Session = Depends(get_db)):
     item = db.scalar(select(VoiceSession).where(VoiceSession.runtime_session_id == runtime_session_id))
     if not item:
         raise DomainError("VOICE_SESSION_NOT_FOUND", "Voice session was not found.", 404)
+    if not receipt(db, item, body.event_id, {"end": body.model_dump()}):
+        return _session_row(item)
+    db.refresh(item)
+    if item.ended_at and item.status in {"completed", "error"} and item.status != body.status:
+        raise DomainError("VOICE_SESSION_ENDED", "The call already has a final outcome.", 409)
+    if item.status not in {"completed", "error"}:
+        item.ended_at = utcnow()
     item.status = body.status
-    item.ended_at = utcnow()
     db.commit()
     return _session_row(item)
 
@@ -231,5 +265,5 @@ def _session_row(item: VoiceSession) -> dict:
         "id": item.id, "runtime_session_id": item.runtime_session_id, "status": item.status,
         "channel": item.channel, "turn_count": item.turn_count, "tool_call_count": item.tool_call_count,
         "last_intent": item.last_intent, "appointment_id": item.appointment_id,
-        "started_at": item.started_at, "ended_at": item.ended_at,
+        "started_at": utc(item.started_at), "ended_at": utc(item.ended_at) if item.ended_at else None,
     }

@@ -250,6 +250,46 @@ class VoiceSession(Base):
     appointment_id: Mapped[str | None] = mapped_column(ForeignKey("appointments.id"), nullable=True, index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    interaction_id: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
+    agent_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    admission_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mint_claimed: Mapped[bool] = mapped_column(Boolean, default=False)
+    recording_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recording_notice_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    recording_available_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    appointment: Mapped[Appointment | None] = relationship()
+
+
+class VoiceAdmissionGate(Base):
+    __tablename__ = "voice_admission_gate"
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    touched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class VoiceRateLimit(Base):
+    __tablename__ = "voice_rate_limits"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class VoiceEventReceipt(Base):
+    __tablename__ = "voice_event_receipts"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("voice_sessions.id"), index=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class VoiceRecordingAccess(Base):
+    __tablename__ = "voice_recording_access"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    session_id: Mapped[str] = mapped_column(ForeignKey("voice_sessions.id"), index=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("staff_users.id"))
+    outcome: Mapped[str] = mapped_column(String(24))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class VoiceToolCall(Base):

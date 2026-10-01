@@ -12,6 +12,7 @@ from .api import router
 from .admin import router as admin_router
 from .integrations import router as integrations_router
 from .voice_web import router as voice_web_router
+from .voice.staff import router as voice_staff_router
 from .whatsapp import router as whatsapp_router
 from .whatsapp_admin import router as whatsapp_admin_router, page_router as whatsapp_page_router
 from .whatsapp_outreach import admin_router as outreach_admin_router, service_router as outreach_service_router
@@ -28,6 +29,11 @@ from .services import DomainError
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if settings.demo_mode:
+        from .demo import guard
+        guard()
+    if settings.app_env == "demo" and not settings.demo_mode:
+        raise RuntimeError("APP_ENV=demo requires the isolated demo runner")
     if settings.app_env == "production":
         for name in ("admin_api_key", "voice_service_api_key", "whatsapp_service_api_key", "whatsapp_owner_secret"):
             value = getattr(settings, name)
@@ -62,9 +68,9 @@ async def request_context(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     if request.url.path.startswith("/api/v1/") or request.url.path.startswith("/staff") or request.url.path == "/whatsapp-assets":
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
     if request.url.path.startswith("/staff") or request.url.path == "/whatsapp-assets":
-        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
     return response
 
 
@@ -102,6 +108,7 @@ app.include_router(router)
 app.include_router(admin_router)
 app.include_router(integrations_router)
 app.include_router(voice_web_router)
+app.include_router(voice_staff_router)
 app.include_router(whatsapp_router)
 app.include_router(whatsapp_admin_router)
 app.include_router(whatsapp_page_router)
@@ -117,3 +124,6 @@ app.include_router(growth_page_router)
 app.include_router(module_router)
 
 app.include_router(posthog_growth_router)
+
+from .demo.router import router as demo_router
+app.include_router(demo_router)

@@ -18,9 +18,9 @@ def test_upgrade_to_merged_whatsapp_head(tmp_path, initial):
                                 cwd=root, env=env, capture_output=True, text=True, timeout=30)
         assert result.returncode == 0, result.stderr
     with sqlite3.connect(database) as db:
-        assert db.execute("SELECT version_num FROM alembic_version").fetchall() == [("0009_client_modules",)]
+        assert db.execute("SELECT version_num FROM alembic_version").fetchall() == [("0010_voice_module",)]
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert {"whatsapp_inbound", "media_assets", "appointments", "schedule_rules", "whatsapp_contacts", "whatsapp_outbound", "staff_users", "staff_sessions", "client_modules", "growth_audit"} <= tables
+        assert {"whatsapp_inbound", "media_assets", "appointments", "schedule_rules", "whatsapp_contacts", "whatsapp_outbound", "staff_users", "staff_sessions", "client_modules", "growth_audit", "voice_recording_access", "voice_event_receipts", "voice_admission_gate", "voice_rate_limits"} <= tables
         assert "schedule_date" in {row[1] for row in db.execute("PRAGMA table_info(schedule_rules)")}
 
 
