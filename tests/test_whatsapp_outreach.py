@@ -46,6 +46,11 @@ def setup(monkeypatch):
         with factory() as db:
             yield db
     app.dependency_overrides[get_db] = override
+    # The CI container phase has a deployment .env. Isolate test credentials
+    # while retaining real authentication checks, including rejected keys.
+    monkeypatch.setattr(settings, "admin_api_key", A["X-Admin-Key"])
+    monkeypatch.setattr(settings, "whatsapp_service_api_key", S["X-Service-Key"])
+    monkeypatch.setattr(settings, "whatsapp_owner_secret", "outreach-fixture-owner-secret")
     monkeypatch.setattr(settings, "whatsapp_outreach_enabled", True)
     monkeypatch.setattr(settings, "whatsapp_test_recipients", TESTER)
     monkeypatch.setattr(outreach, "utcnow", lambda: NOW)
