@@ -2,8 +2,12 @@ name: WhatsApp integration
 
 on:
   push:
-    branches: [main, 'codex/whatsapp-*']
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
