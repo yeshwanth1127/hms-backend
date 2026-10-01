@@ -153,12 +153,12 @@ def test_voice_service_books_and_is_visible_to_admin():
         assert started.status_code == 201
 
         doctors = client.get("/api/v1/integrations/voice/doctors", headers=service_headers,
-                             params={"department": "cardiology"}).json()
+                             params={"department": "cardiology"}).json()["doctors"]
         doctor = doctors[0]
-        assert [item["slug"] for item in doctor["branches"]] == ["indiranagar"]
-        assert [item["slug"] for item in doctor["in_person_branches"]] == ["indiranagar"]
-        assert doctor["virtual_branches"] == []
-        assert doctor["accepts_virtual"] is False
+        assert [item["slug"] for item in doctor["branches"]] == ["indiranagar", "koramangala"]
+        assert [item["slug"] for item in doctor["in_person_branches"]] == ["indiranagar", "koramangala"]
+        assert [item["slug"] for item in doctor["virtual_branches"]] == ["virtual"]
+        assert doctor["accepts_virtual"] is True
         branch = next(item for item in doctor["branches"] if item["slug"] == "indiranagar")
         day = future_weekday(2)
         slot = client.get("/api/v1/integrations/voice/availability", headers=service_headers, params={
@@ -184,8 +184,8 @@ def test_voice_service_books_and_is_visible_to_admin():
             params={"patient_phone": "+919888888888"},
         )
         assert looked_up.status_code == 200
-        assert [item["id"] for item in looked_up.json()] == [appointment["id"]]
-        assert looked_up.json()[0]["reservation"]["starts_at"].removesuffix("Z") == slot["starts_at"].removesuffix("Z")
+        assert [item["id"] for item in looked_up.json()["appointments"]] == [appointment["id"]]
+        assert looked_up.json()["appointments"][0]["reservation"]["starts_at"].removesuffix("Z") == slot["starts_at"].removesuffix("Z")
 
         verified_lookup = client.get(
             "/api/v1/integrations/voice/appointments",
@@ -196,7 +196,7 @@ def test_voice_service_books_and_is_visible_to_admin():
             },
         )
         assert verified_lookup.status_code == 200
-        assert [item["id"] for item in verified_lookup.json()] == [appointment["id"]]
+        assert [item["id"] for item in verified_lookup.json()["appointments"]] == [appointment["id"]]
 
         assert client.get(
             "/api/v1/integrations/voice/appointments",
@@ -210,7 +210,7 @@ def test_voice_service_books_and_is_visible_to_admin():
             "/api/v1/integrations/voice/appointments",
             headers=service_headers,
             params={"patient_phone": "+919888888888", "confirmation_code": "WRONG-CODE"},
-        ).json() == []
+        ).json() == {"appointments": [], "count": 0}
 
         client.post(f"/api/v1/integrations/voice/sessions/{session_id}/events", headers=service_headers,
                     json={"tool_name": "confirm_appointment", "intent": "book_appointment",
@@ -249,7 +249,7 @@ def test_voice_doctor_modes_come_from_schedules_not_profile_branches():
             voice_doctors = client.get(
                 "/api/v1/integrations/voice/doctors", headers=service_headers,
                 params={"department": "cardiology"},
-            ).json()
+            ).json()["doctors"]
             voice_doctor = next(item for item in voice_doctors if item["id"] == doctor["id"])
             assert [item["slug"] for item in voice_doctor["virtual_branches"]] == ["virtual"]
             assert voice_doctor["accepts_virtual"] is True

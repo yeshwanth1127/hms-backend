@@ -11,6 +11,7 @@ from sqlalchemy import text
 from .api import router
 from .admin import router as admin_router
 from .integrations import router as integrations_router
+from .voice_web import router as voice_web_router
 from .whatsapp import router as whatsapp_router
 from .whatsapp_admin import router as whatsapp_admin_router, page_router as whatsapp_page_router
 from .whatsapp_outreach import admin_router as outreach_admin_router, service_router as outreach_service_router
@@ -100,6 +101,7 @@ def ready():
 app.include_router(router)
 app.include_router(admin_router)
 app.include_router(integrations_router)
+app.include_router(voice_web_router)
 app.include_router(whatsapp_router)
 app.include_router(whatsapp_admin_router)
 app.include_router(whatsapp_page_router)
