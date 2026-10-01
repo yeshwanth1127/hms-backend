@@ -125,6 +125,8 @@ class Appointment(Base):
     patient_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(800), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="confirmed")
+    acquisition_source: Mapped[str] = mapped_column(String(32), index=True, default="unknown")
+    is_demo: Mapped[bool] = mapped_column(Boolean, index=True, default=True)
     origin_channel: Mapped[str] = mapped_column(String(24), default="web")
     consent_to_reminders: Mapped[bool] = mapped_column(Boolean, default=False)
     idempotency_key: Mapped[str] = mapped_column(String(120), unique=True)
@@ -377,3 +379,65 @@ class WhatsAppFollowupRule(Base):
     template_fingerprint: Mapped[str] = mapped_column(String(64))
     delay_hours: Mapped[int] = mapped_column(Integer, default=24)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class StaffUser(Base):
+    __tablename__ = "staff_users"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(40))
+    password_hash: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(String(20), default="staff")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StaffSession(Base):
+    __tablename__ = "staff_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("staff_users.id", ondelete="CASCADE"), index=True)
+    csrf_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StaffLoginLimit(Base):
+    __tablename__ = "staff_login_limits"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class GoogleBookingLink(Base):
+    __tablename__ = "google_booking_links"
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id"), primary_key=True)
+    booking_url: Mapped[str] = mapped_column(String(2048))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class GrowthAudit(Base):
+    __tablename__ = "growth_audit"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    branch_id: Mapped[str] = mapped_column(ForeignKey("branches.id"), index=True)
+    actor: Mapped[str] = mapped_column(String(160))
+    action: Mapped[str] = mapped_column(String(80))
+    change: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ClientModule(Base):
+    """Optional capabilities for this clinic deployment; not a multi-tenant boundary."""
+    __tablename__ = "client_modules"
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ModuleAudit(Base):
+    __tablename__ = "module_audit"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    module_key: Mapped[str] = mapped_column(String(40), index=True)
+    actor: Mapped[str] = mapped_column(ForeignKey("staff_users.id"))
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

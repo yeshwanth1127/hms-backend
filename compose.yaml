@@ -8,6 +8,8 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://avocado:avocado@postgres:5432/avocado
       REDIS_URL: redis://redis:6379/0
+      STAFF_ORIGIN: ${STAFF_ORIGIN:-}
+      BOOKING_ALLOWED_ORIGINS: ${BOOKING_ALLOWED_ORIGINS:-}
       ALLOWED_ORIGINS: http://localhost:5567
       ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
       VOICE_SERVICE_API_KEY: ${VOICE_SERVICE_API_KEY:-dev-voice-service-key}

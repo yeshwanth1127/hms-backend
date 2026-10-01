@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./avocado.db"
     redis_url: str = "redis://localhost:6379/0"
     allowed_origins: str = "http://localhost:5567,http://127.0.0.1:5567"
+    booking_allowed_origins: str = ""
+    staff_origin: str = ""
     slot_hold_minutes: int = 7
     admin_api_key: str = "dev-admin-key"
     voice_service_api_key: str = "dev-voice-service-key"

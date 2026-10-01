@@ -8,19 +8,21 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .admin import require_admin
+from .client_modules import require_whatsapp_module
 from .db import get_db
 from .media import asset_row, media_path, save_upload
 from .models import CaseAttachment, Department, Doctor, MediaAsset, ReminderJob, SupportCase, WhatsAppInbound
 from .schemas import SupportCaseStatusUpdate
 from .services import DomainError
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin-whatsapp"])
+router = APIRouter(prefix="/api/v1/admin", tags=["admin-whatsapp"], dependencies=[Depends(require_whatsapp_module)])
 page_router = APIRouter()
 
 
-@page_router.get("/whatsapp-assets", response_class=HTMLResponse)
+@page_router.get("/whatsapp-assets", include_in_schema=False)
 def upload_page():
-    return Path(__file__).with_name("whatsapp_assets.html").read_text()
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/staff/whatsapp")
 
 
 @router.get("/whatsapp-assets")
@@ -118,8 +120,3 @@ def case_asset(asset_id: str, _: str = Depends(require_admin), db: Session = Dep
         raise DomainError("ASSET_MISSING", "Attachment is missing from storage.", 503)
     return FileResponse(path, media_type=asset.mime_type, filename=asset.original_name,
                         headers={"Cache-Control": "private, no-store"})
-
-
-@page_router.get("/whatsapp-operations.js", include_in_schema=False)
-def operations_script():
-    return FileResponse(Path(__file__).with_name("whatsapp_operations.js"), media_type="application/javascript", headers={"Cache-Control": "no-store"})

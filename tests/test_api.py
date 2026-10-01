@@ -125,7 +125,7 @@ def test_second_hold_cannot_take_same_slot():
 
 def test_admin_requires_key_and_manages_catalogue():
     with TestClient(app) as client:
-        assert client.get("/api/v1/admin/analytics").status_code == 422
+        assert client.get("/api/v1/admin/analytics").status_code == 401
         assert client.get("/api/v1/admin/analytics", headers={"X-Admin-Key": "wrong-key"}).status_code == 401
         headers = {"X-Admin-Key": "dev-admin-key"}
         analytics = client.get("/api/v1/admin/analytics", headers=headers)

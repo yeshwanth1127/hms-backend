@@ -6,14 +6,16 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile, Request
 from fastapi.responses import FileResponse
 from .media import save_upload, asset_row, media_path
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .staff_auth import staff_label
 from .admin import require_admin
+from .client_modules import require_whatsapp_module
 from .config import settings
 from .db import get_db
 from .models import (Appointment, Branch, Department, Doctor, MediaAsset, ReminderJob, SupportCase,
@@ -23,7 +25,7 @@ from .models import (Appointment, Branch, Department, Doctor, MediaAsset, Remind
 from .services import DomainError
 from .whatsapp import require_whatsapp_service, owner_key
 
-admin_router = APIRouter(prefix="/api/v1/admin/whatsapp", tags=["whatsapp-operations"])
+admin_router = APIRouter(prefix="/api/v1/admin/whatsapp", tags=["whatsapp-operations"], dependencies=[Depends(require_whatsapp_module)])
 service_router = APIRouter(prefix="/api/v1/integrations/whatsapp", tags=["whatsapp-outreach"])
 SENDER = r"^[0-9]{7,20}$"
 ACTIVE_SENDS = ("sending", "accepted", "sent", "delivered", "read", "uncertain")
@@ -297,7 +299,10 @@ def reception_list(_: str = Depends(require_admin), db: Session = Depends(get_db
 
 
 @admin_router.patch("/reception/{sender_id}")
-def reception_assign(sender_id: str, body: StaffHandoff, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def reception_assign(sender_id: str, body: StaffHandoff, request: Request, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    if getattr(request.state, "staff_user", None):
+        user = request.state.staff_user
+        body.assigned_to = staff_label(user)
     handoff = db.get(WhatsAppHandoff, sender_id)
     if not handoff:
         raise DomainError("HANDOFF_NOT_FOUND", "Reception conversation was not found.", 404)
@@ -309,7 +314,10 @@ def reception_assign(sender_id: str, body: StaffHandoff, _: str = Depends(requir
 
 
 @admin_router.post("/reception/{sender_id}/reply", status_code=202)
-def reception_reply(sender_id: str, body: StaffReply, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def reception_reply(sender_id: str, body: StaffReply, request: Request, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    if getattr(request.state, "staff_user", None):
+        user = request.state.staff_user
+        body.actor = staff_label(user)
     handoff = db.get(WhatsAppHandoff, sender_id)
     contact = db.get(WhatsAppContact, sender_id)
     if not handoff or handoff.status == "closed" or not contact or contact.stopped_all:
@@ -530,7 +538,10 @@ def campaign_preview(campaign_id: str, _: str = Depends(require_admin), db: Sess
 
 
 @admin_router.post("/campaigns/{campaign_id}/test", status_code=202)
-def campaign_test(campaign_id: str, body: CampaignTest, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def campaign_test(campaign_id: str, body: CampaignTest, request: Request, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    if getattr(request.state, "staff_user", None):
+        user = request.state.staff_user
+        body.actor = staff_label(user)
     campaign = db.get(WhatsAppCampaign, campaign_id)
     if not campaign or campaign.status != "draft":
         raise DomainError("CAMPAIGN_UNAVAILABLE", "Choose an unscheduled draft.", 409)
@@ -548,7 +559,10 @@ def campaign_test(campaign_id: str, body: CampaignTest, _: str = Depends(require
 
 
 @admin_router.post("/campaigns/{campaign_id}/approve")
-def campaign_approve(campaign_id: str, body: CampaignApproval, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def campaign_approve(campaign_id: str, body: CampaignApproval, request: Request, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    if getattr(request.state, "staff_user", None):
+        user = request.state.staff_user
+        body.actor = staff_label(user)
     campaign = db.scalar(select(WhatsAppCampaign).where(WhatsAppCampaign.id == campaign_id).with_for_update())
     if not campaign or campaign.status != "draft":
         raise DomainError("CAMPAIGN_UNAVAILABLE", "Choose an unscheduled draft.", 409)
@@ -640,7 +654,10 @@ def followup_rule(kind: str, body: RuleChange, _: str = Depends(require_admin), 
 
 
 @admin_router.post("/appointments/{appointment_id}/followup", status_code=202)
-def manual_followup(appointment_id: str, body: ManualFollowup, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def manual_followup(appointment_id: str, body: ManualFollowup, request: Request, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    if getattr(request.state, "staff_user", None):
+        user = request.state.staff_user
+        body.actor = staff_label(user)
     if body.due_at.tzinfo is None or utc(body.due_at) <= utcnow() or utc(body.due_at) > utcnow() + timedelta(days=180):
         raise DomainError("INVALID_DATE", "Choose a future follow-up date within 180 days with a timezone.", 422)
     appointment = db.get(Appointment, appointment_id)
@@ -701,6 +718,9 @@ def job_row(db, job):
 
 @service_router.post("/outreach/claim")
 def outbound_claim(_: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    from .client_modules import is_enabled
+    if not is_enabled(db, "whatsapp"):
+        return None
     now = utcnow()
     stale = db.scalars(select(WhatsAppOutbound).where(WhatsAppOutbound.status.in_(("claimed", "sending")),
         WhatsAppOutbound.claimed_at < now - timedelta(minutes=15)).with_for_update(skip_locked=True)).all()
@@ -737,6 +757,11 @@ def outbound_sending(job_id: str, body: Transition, _: None = Depends(require_wh
     job = db.scalar(select(WhatsAppOutbound).where(WhatsAppOutbound.id == job_id).with_for_update().execution_options(populate_existing=True))
     if not job or job.status != "claimed" or job.claim_token != body.claim_token or not job.claimed_at or utc(job.claimed_at) < utcnow() - timedelta(minutes=15):
         raise DomainError("CLAIM_LOST", "Message claim is no longer active.", 409)
+    from .client_modules import is_enabled
+    if not is_enabled(db, "whatsapp"):
+        job.status, job.claim_token = "pending", None
+        db.commit()
+        return {"send": False, "reason": "module_disabled"}
     contact = db.scalar(select(WhatsAppContact).where(WhatsAppContact.sender_id == job.sender_id).with_for_update())
     if not settings.whatsapp_outreach_enabled and job.purpose != "test":
         job.status, job.claim_token = "cancelled", None
@@ -860,6 +885,9 @@ def outbound_list(_: str = Depends(require_admin), db: Session = Depends(get_db)
 
 @service_router.post("/reminders/{job_id}/authorize")
 def authorize_reminder(job_id: str, _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    from .client_modules import is_enabled
+    if not is_enabled(db, "whatsapp"):
+        return {"send": False, "reason": "module_disabled"}
     job = db.get(ReminderJob, job_id)
     if not job or job.status != "claimed":
         return {"send": False}
@@ -909,7 +937,7 @@ def staff_asset(asset_id: str, _: str = Depends(require_admin), db: Session = De
 
 @admin_router.get("/operations-config")
 def operations_config(_: str = Depends(require_admin), db: Session = Depends(get_db)):
-    return {"outreach_enabled": settings.whatsapp_outreach_enabled,
+    return {"environment": settings.app_env, "outreach_enabled": settings.whatsapp_outreach_enabled,
             "test_recipients": [n.strip() for n in settings.whatsapp_test_recipients.split(",") if re.fullmatch(SENDER, n.strip())],
             "marketing_contacts": db.scalar(select(func.count()).select_from(WhatsAppContact).where(WhatsAppContact.marketing.is_(True), WhatsAppContact.stopped_all.is_(False))) or 0,
             "reception": {"phone": settings.clinic_phone, "hours": settings.reception_hours, "response": settings.reception_response}}

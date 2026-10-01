@@ -267,7 +267,7 @@ def test_media_required_and_template_layouts_fail_closed(setup):
     template["components"][1]["buttons"] = ["invalid"]
     assert c.post(P + "/templates/sync", headers=S, json={"templates": [template]}).status_code == 200
     assert c.get(D + "/templates", headers=A).json()[0]["spec"] is None
-    assert c.get("/whatsapp-operations.js").status_code == 200
+    assert c.get("/whatsapp-assets", follow_redirects=False).headers["location"] == "/staff/whatsapp"
 
 
 def book(c, suffix, consent=True, expected_fee=None):
@@ -348,7 +348,7 @@ def test_no_show_care_requires_service_consent_and_cannot_be_triggered_by_patien
     item = response.json()
     with factory() as db:
         appt = db.get(Appointment, item["id"]); appt.reservation.starts_at = NOW - timedelta(hours=3); appt.reservation.ends_at = NOW - timedelta(hours=2); db.commit()
-    assert c.patch(f"/api/v1/admin/appointments/{item['id']}/status", headers=S, json={"status": "no_show"}).status_code == 422
+    assert c.patch(f"/api/v1/admin/appointments/{item['id']}/status", headers=S, json={"status": "no_show"}).status_code == 401
     assert c.patch(f"/api/v1/admin/appointments/{item['id']}/status", headers=A, json={"status": "no_show"}).status_code == 200
     assert claim(c) is None
 
@@ -380,7 +380,7 @@ def test_campaign_pdf_upload_stays_private_and_patient_assets_cannot_be_reused(s
     upload = c.post(D + "/campaign-assets", headers=A, files={"file": ("approved-guide.pdf", document.getvalue(), "application/pdf")})
     assert upload.status_code == 201, upload.text
     asset = upload.json()
-    assert c.get(D + f"/assets/{asset['id']}").status_code == 422
+    assert c.get(D + f"/assets/{asset['id']}").status_code == 401
     assert c.get(D + f"/assets/{asset['id']}", headers=A).content == document.getvalue()
     assert c.get(P + f"/assets/{asset['id']}", headers=S).status_code == 404
     sync(c, header="DOCUMENT")

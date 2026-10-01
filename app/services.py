@@ -144,6 +144,7 @@ def confirm_appointment(db: Session, body: AppointmentCreate, *, commit: bool = 
         patient_name=body.patient_name.strip(), patient_phone=body.patient_phone.strip(),
         patient_email=str(body.patient_email) if body.patient_email else None,
         reason=body.reason.strip() if body.reason else None, origin_channel=body.origin_channel,
+        acquisition_source=body.acquisition_source, is_demo=settings.app_env != "production",
         consent_to_reminders=body.consent_to_reminders,
         idempotency_key=body.idempotency_key, status="confirmed",
     )

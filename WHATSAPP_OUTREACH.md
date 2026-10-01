@@ -1,7 +1,7 @@
 # WhatsApp booking, reception and outreach
 
-The bot and clinic desk live in this backend repository. The staff desk is
-`/whatsapp-assets`. Production delivery remains an operator-controlled rollout;
+The bot and clinic desk live in this backend repository. The staff desk is `/staff/whatsapp` in the shared clinic workspace.
+`/whatsapp-assets` redirects there. Production delivery remains an operator-controlled rollout;
 payments are disabled and all fees shown are payable at the clinic.
 
 ## Patient experience
@@ -58,10 +58,10 @@ clinic address fields and a fee snapshot without rewriting old bookings.
 
 Keep one bot replica. The database coordinates claims and frequency checks,
 but inbound session ordering and exactly-once external sends are not proven
-for multiple workers. Keep the staff desk behind HTTPS and authenticated staff
-access. Its shared admin key is an existing pilot mechanism: the entered staff
-name is an attribution label, **not a verified user identity**. Connect the
-hospital's real authentication and staff roles before broad staff access.
+for multiple workers. The desk now uses named staff accounts and HttpOnly cookie
+sessions. Staff identity is derived from sign-in; the shared admin key remains
+server-integration compatibility only. See STAFF_WORKSPACE.md for account setup,
+HTTPS, roles and deployment requirements.
 
 ## Staff desk
 

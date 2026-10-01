@@ -2,7 +2,7 @@ import secrets
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -19,10 +19,15 @@ from .services import DomainError
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
-def require_admin(x_admin_key: str = Header(alias="X-Admin-Key")) -> str:
-    if not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        raise DomainError("ADMIN_AUTH_REQUIRED", "A valid administrator key is required.", 401)
-    return "local-admin"
+def require_admin(request: Request, x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"), db: Session = Depends(get_db)) -> str:
+    # Legacy keys remain server-to-server compatibility only; the staff UI uses cookies.
+    if x_admin_key and secrets.compare_digest(x_admin_key, settings.admin_api_key):
+        return "local-admin"
+    from .staff_auth import current_staff
+    user, _ = current_staff(request, db, mutate=request.method not in ("GET", "HEAD", "OPTIONS"))
+    if user.role not in ("admin", "staff"):
+        raise DomainError("STAFF_PERMISSION_DENIED", "Your account does not have access to clinic operations.", 403)
+    return user.id
 
 
 def _utc(value: datetime) -> datetime:

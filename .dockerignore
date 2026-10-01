@@ -9,3 +9,7 @@
 *.db
 uploads
 whatsapp-bot
+**/node_modules
+app/staff_static
+.local
+staff-web/.vite

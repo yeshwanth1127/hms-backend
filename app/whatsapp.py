@@ -7,7 +7,7 @@ import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
@@ -30,9 +30,17 @@ from .services import DomainError, availability, cancel_appointment, confirm_app
 router = APIRouter(prefix="/api/v1/integrations/whatsapp", tags=["whatsapp-integration"])
 
 
-def require_whatsapp_service(x_service_key: str = Header(alias="X-Service-Key")) -> None:
+def require_whatsapp_service(request: Request, x_service_key: str = Header(alias="X-Service-Key"), db: Session = Depends(get_db)) -> None:
     if not secrets.compare_digest(x_service_key, settings.whatsapp_service_api_key):
         raise DomainError("SERVICE_AUTH_REQUIRED", "A valid WhatsApp service key is required.", 401)
+
+    # Persist inbound events and delivery outcomes even while the module is off.
+    path = request.url.path.removeprefix("/api/v1/integrations/whatsapp")
+    intake = path in {"/inbound", "/inbound/ready", "/inbound/claim", "/outreach/claim", "/reminders/due", "/delivery-status"}
+    transition = bool(re.fullmatch(r"/(?:inbound|outreach)/[^/]+/(?:sent|failed)", path) or re.fullmatch(r"/reminders/[^/]+/(?:complete|authorize)", path) or re.fullmatch(r"/outreach/[^/]+/sending", path))
+    if not intake and not transition:
+        from .client_modules import ensure_module
+        ensure_module(db, "whatsapp")
 
 
 def owner_key(sender_id: str) -> str:
@@ -132,6 +140,9 @@ def inbound_ready(_: None = Depends(require_whatsapp_service), db: Session = Dep
 
 @router.post("/inbound/claim")
 def inbound_claim(_: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
+    from .client_modules import is_enabled
+    if not is_enabled(db, "whatsapp"):
+        return None
     now = utcnow()
     expired = db.scalars(select(WhatsAppInbound).where(
         or_(and_(WhatsAppInbound.status == "sending",
@@ -480,6 +491,9 @@ def asset_download(asset_id: str, _: None = Depends(require_whatsapp_service), d
 @router.get("/reminders/due")
 def reminders_due(limit: int = Query(20, ge=1, le=100), _: None = Depends(require_whatsapp_service),
                   db: Session = Depends(get_db)):
+    from .client_modules import is_enabled
+    if not is_enabled(db, "whatsapp"):
+        return []
     now = utcnow()
     stale = db.scalars(select(ReminderJob).where(
         ReminderJob.status == "claimed", ReminderJob.claimed_at < now - timedelta(minutes=15))

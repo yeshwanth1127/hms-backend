@@ -51,7 +51,7 @@ See the frontend repository's `BACKEND_ARCHITECTURE.md` for the complete deliver
 
 The complete Node WhatsApp runtime is included in [`whatsapp-bot/`](./whatsapp-bot/README.md). Configure `whatsapp-bot/.env`, then run `docker compose --profile whatsapp up --build` to start it together with this API. Node can also run separately from the same checkout. The website repository is no longer needed to host the bot. The Compose profile is development-only; see the bot's [production deployment guide](./whatsapp-bot/PRODUCTION_DEPLOYMENT.md) for clinic deployment requirements.
 
-The [WhatsApp contract](./WHATSAPP_CONTRACT.md) lists every bot-facing route and the patient ownership rule. Run this backend on `127.0.0.1:8000`, then open `http://127.0.0.1:8000/whatsapp-assets` for the staff drag-and-drop page. Enter `ADMIN_API_KEY` from your local environment; the page keeps it in memory only. Upload one PDF per specialty and a PNG/JPEG portrait per doctor. Uploaded files live in `MEDIA_DIR`; back up that directory along with the database.
+The [WhatsApp contract](./WHATSAPP_CONTRACT.md) lists every bot-facing route and the patient ownership rule. Run this backend on `127.0.0.1:8000`, then build `staff-web`, provision a named administrator and open `http://127.0.0.1:8000/staff/whatsapp` for the shared staff workspace. See [STAFF_WORKSPACE.md](STAFF_WORKSPACE.md) for username/password setup. Upload one PDF per specialty and a PNG/JPEG portrait per doctor. Uploaded files live in `MEDIA_DIR`; back up that directory along with the database.
 
 Set a distinct `WHATSAPP_SERVICE_API_KEY` and a long random `WHATSAPP_OWNER_SECRET` in the backend environment. Configure the Node bot with the same service key and `BACKEND_URL`. The bot must verify Meta webhook signatures before it sends a `sender_id` to this API. The owner key is derived from that verified sender and never sent by patients. The WhatsApp route only lists or manages appointments created by that WhatsApp sender; it does not reveal existing web or voice appointments by matching a phone number.
 
@@ -63,3 +63,10 @@ This repository still seeds illustrative doctors and schedules in development, w
 
 See [WHATSAPP_OUTREACH.md](WHATSAPP_OUTREACH.md) for consent, campaign approval,
 reception handoff, clinic details, follow-up contracts and rollout switches.
+
+## Shared staff workspace
+
+Appointments, doctors, schedules and optional WhatsApp/Google/growth modules share
+a shadcn interface and named staff login. See [STAFF_WORKSPACE.md](STAFF_WORKSPACE.md)
+for setup and [the UX decision book](STAFF_WORKSPACE_UX_DECISION_BOOK.md) for the
+design rationale, trade-offs and verification boundaries.

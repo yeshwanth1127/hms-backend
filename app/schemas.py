@@ -90,6 +90,7 @@ class AppointmentCreate(BaseModel):
     patient_phone: str = Field(min_length=7, max_length=32)
     patient_email: EmailStr | None = None
     reason: str | None = Field(default=None, max_length=800)
+    acquisition_source: Literal["unknown", "direct", "google_business", "organic_search", "paid", "referral"] = "unknown"
     origin_channel: Literal["web", "voice", "staff", "whatsapp"] = "web"
     consent_to_reminders: bool = False
     idempotency_key: str = Field(min_length=8, max_length=120)

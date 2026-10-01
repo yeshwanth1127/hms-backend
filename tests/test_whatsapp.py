@@ -206,7 +206,7 @@ def test_inbound_queue_deduplicates_and_quarantines_ambiguous_sends():
         assert client.post(f"{path}/claim", headers=SERVICE).json() is None
         issues = client.get(f"{path}/issues", headers=SERVICE).json()
         assert any(item["message_id"] == message["message_id"] for item in issues)
-        assert client.get("/api/v1/admin/whatsapp-delivery-issues").status_code == 422
+        assert client.get("/api/v1/admin/whatsapp-delivery-issues").status_code == 401
         staff_issues = client.get("/api/v1/admin/whatsapp-delivery-issues", headers=ADMIN).json()
         assert any(item["message_id"] == message["message_id"] for item in staff_issues["inbound"])
         with SessionLocal() as db:
@@ -336,4 +336,4 @@ def test_uploads_cases_and_validation(tmp_path, monkeypatch):
         assert changed.status_code == 200
         assert changed.json()["status"] == "in_progress"
         assert client.patch(f"/api/v1/admin/whatsapp-cases/{case.json()['id']}",
-                            headers=SERVICE, json={"status": "resolved"}).status_code == 422
+                            headers=SERVICE, json={"status": "resolved"}).status_code == 401
