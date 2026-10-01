@@ -10,6 +10,7 @@ from .admin import require_admin
 
 router = APIRouter(prefix="/api/v1/staff/modules", tags=["client-modules"])
 MODULES = {
+    "voice": {"name": "Voice", "description": "Sarvam calls, booking outcomes and admin recording review.", "permission": "voice.read"},
     "whatsapp": {"name": "WhatsApp", "description": "Bot conversations, reception handoff and consented outreach.", "permission": "whatsapp.manage"},
     "google_business": {"name": "Google Business", "description": "Profile setup, booking links and patient journey previews.", "permission": "google.manage"},
     "growth_analytics": {"name": "Growth analytics", "description": "Appointment attribution, confirmation and attendance reports.", "permission": "growth.read"},

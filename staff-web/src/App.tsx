@@ -20,6 +20,7 @@ import {
   Stethoscope,
   BookOpen,
   LoaderCircle,
+  Headphones,
 } from "lucide-react";
 import { api, setSession, type Session, type StaffUser } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -80,6 +81,10 @@ const SettingsModule = lazy(() =>
   import("@/modules/settings").then((m) => ({ default: m.SettingsModule })),
 );
 
+const VoiceModule = lazy(() =>
+  import("@/modules/voice").then((m) => ({ default: m.VoiceModule })),
+);
+
 function route() {
   const parts = location.pathname.split("/").filter(Boolean);
   return { module: parts[1] ?? "whatsapp", page: parts[2] ?? "overview" };
@@ -89,6 +94,7 @@ const clinicNav = [
   { key: "doctors", name: "Doctors", icon: Stethoscope },
   { key: "schedules", name: "Schedules", icon: Clock3 },
   { key: "whatsapp", name: "WhatsApp", icon: MessageCircle },
+  { key: "voice", name: "Voice", icon: Headphones },
 ];
 function Brand() {
   return (
@@ -303,7 +309,7 @@ export default function App() {
   const navigation = clinicNav.filter(
     (n) =>
       user.role !== "growth_manager" &&
-      (n.key !== "whatsapp" || available("whatsapp")),
+      (!["whatsapp", "voice"].includes(n.key) || available(n.key)),
   );
   const growthNavigation = [
     { key: "google_business", name: "Google Business", icon: Globe },
@@ -314,7 +320,7 @@ export default function App() {
     },
   ].filter((n) => available(n.key));
   const moduleAllowed =
-    !["whatsapp", "google_business", "growth_analytics"].includes(
+    !["whatsapp", "voice", "google_business", "growth_analytics"].includes(
       current.module,
     ) || available(current.module);
   const title =
@@ -502,6 +508,8 @@ export default function App() {
                     current.module as "google_business" | "growth_analytics"
                   }
                 />
+              ) : current.module === "voice" ? (
+                <VoiceModule />
               ) : current.module === "whatsapp" ? (
                 <WhatsAppModule
                   user={user}

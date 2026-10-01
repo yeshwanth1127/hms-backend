@@ -233,6 +233,8 @@ def operations(_: str = Depends(require_admin), db: Session = Depends(get_db)):
 @router.get("/voice-sessions")
 def voice_sessions(limit: int = Query(100, ge=1, le=500), _: str = Depends(require_admin),
                    db: Session = Depends(get_db)):
+    from .client_modules import ensure_module
+    ensure_module(db, "voice")
     items = db.scalars(select(VoiceSession).order_by(VoiceSession.started_at.desc()).limit(limit)).all()
     return [{
         "id": item.id, "runtime_session_id": item.runtime_session_id, "status": item.status,

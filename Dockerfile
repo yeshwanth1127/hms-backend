@@ -1,7 +1,7 @@
 FROM node:22-alpine AS staff-ui
 WORKDIR /staff-web
 COPY staff-web/package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts
 COPY staff-web/ ./
 RUN npm run build
 

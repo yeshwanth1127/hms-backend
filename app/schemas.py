@@ -135,9 +135,20 @@ class AppointmentOut(APIModel):
     reservation: HoldOut
 
 
+class VoiceAppointmentSummary(APIModel):
+    id: str
+    confirmation_code: str
+    status: str
+    starts_at: datetime
+    ends_at: datetime
+    doctor_name: str
+    branch_name: str
+    consultation_type: str
+
+
 class VoiceAppointmentsResponse(APIModel):
     """Envelope so voice-agent Jinja templates can iterate `appointments` by name."""
-    appointments: list[AppointmentOut]
+    appointments: list[VoiceAppointmentSummary]
     count: int
 
 
@@ -216,9 +227,14 @@ class AppointmentStatusUpdate(BaseModel):
 class VoiceSessionCreate(BaseModel):
     runtime_session_id: str = Field(min_length=8, max_length=80)
     channel: Literal["web_voice", "phone"] = "web_voice"
+    interaction_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
+    agent_version: int = Field(ge=1)
+    provider_reference: str | None = Field(default=None, max_length=160)
+    recording_consent: bool = False
 
 
 class VoiceSessionEvent(BaseModel):
+    event_id: str = Field(min_length=8, max_length=160)
     tool_name: str = Field(min_length=2, max_length=80)
     kind: Literal["tool", "turn"] = "tool"
     outcome: Literal["success", "error", "cancelled"] = "success"
@@ -227,6 +243,7 @@ class VoiceSessionEvent(BaseModel):
 
 
 class VoiceSessionEnd(BaseModel):
+    event_id: str = Field(min_length=8, max_length=160)
     status: Literal["completed", "abandoned", "error"] = "completed"
 
 

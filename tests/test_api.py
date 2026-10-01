@@ -1,6 +1,10 @@
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
+from app.db import SessionLocal
+from app.models import ClientModule
+from app.config import settings
 
 from app.main import app
 
@@ -141,7 +145,26 @@ def test_admin_requires_key_and_manages_catalogue():
         assert len(catalogue.json()["branches"]) == 5
 
 
-def test_voice_service_books_and_is_visible_to_admin():
+@pytest.fixture
+def voice_enabled(monkeypatch):
+    # Optional module activation is explicit, including in contract regression tests.
+    monkeypatch.setattr(settings, 'sarvam_app_version', 7)
+    with TestClient(app):
+        with SessionLocal() as db:
+            record = db.get(ClientModule, 'voice')
+            previous = record.enabled if record else None
+            if record: record.enabled = True
+            else: db.add(ClientModule(key='voice', enabled=True))
+            db.commit()
+        yield
+        with SessionLocal() as db:
+            record = db.get(ClientModule, 'voice')
+            if previous is None: db.delete(record)
+            else: record.enabled = previous
+            db.commit()
+
+
+def test_voice_service_books_and_is_visible_to_admin(voice_enabled):
     with TestClient(app) as client:
         service_headers = {"X-Service-Key": "dev-voice-service-key"}
         assert client.get("/api/v1/integrations/voice/doctors").status_code == 422
@@ -149,7 +172,7 @@ def test_voice_service_books_and_is_visible_to_admin():
 
         session_id = "runtime-test-session-0001"
         started = client.post("/api/v1/integrations/voice/sessions", headers=service_headers,
-                              json={"runtime_session_id": session_id, "channel": "web_voice"})
+                              json={"runtime_session_id": session_id, "channel": "phone", "agent_version": 7, "interaction_id": "interaction-test-session-0001"})
         assert started.status_code == 201
 
         doctors = client.get("/api/v1/integrations/voice/doctors", headers=service_headers,
@@ -177,15 +200,25 @@ def test_voice_service_books_and_is_visible_to_admin():
         })
         assert booking.status_code == 201
         appointment = booking.json()
+        # Booking correlation is persisted even if the runtime never sends a tool event.
+        from app.models import VoiceSession
+        from sqlalchemy import select
+        with SessionLocal() as db:
+            tracked = db.scalar(select(VoiceSession).where(VoiceSession.runtime_session_id == session_id))
+            assert tracked.appointment_id == appointment['id']
+        repeated = client.post("/api/v1/integrations/voice/appointments", headers=service_headers, json={
+            "hold_id": hold.json()["id"], "owner_key": owner_key,
+            "patient_name": "Voice Patient", "patient_phone": "+919888888888",
+            "idempotency_key": "voice-booking-test-0001",
+        })
+        assert repeated.json()['id'] == appointment['id']
 
         looked_up = client.get(
             "/api/v1/integrations/voice/appointments",
             headers=service_headers,
             params={"patient_phone": "+919888888888"},
         )
-        assert looked_up.status_code == 200
-        assert [item["id"] for item in looked_up.json()["appointments"]] == [appointment["id"]]
-        assert looked_up.json()["appointments"][0]["reservation"]["starts_at"].removesuffix("Z") == slot["starts_at"].removesuffix("Z")
+        assert looked_up.status_code == 422
 
         verified_lookup = client.get(
             "/api/v1/integrations/voice/appointments",
@@ -213,10 +246,10 @@ def test_voice_service_books_and_is_visible_to_admin():
         ).json() == {"appointments": [], "count": 0}
 
         client.post(f"/api/v1/integrations/voice/sessions/{session_id}/events", headers=service_headers,
-                    json={"tool_name": "confirm_appointment", "intent": "book_appointment",
+                    json={"event_id": "booking-event-test-0001", "tool_name": "confirm_appointment", "intent": "book_appointment",
                           "appointment_id": appointment["id"]})
         client.patch(f"/api/v1/integrations/voice/sessions/{session_id}", headers=service_headers,
-                     json={"status": "completed"})
+                     json={"event_id": "completed-event-test-0001", "status": "completed"})
 
         admin_headers = {"X-Admin-Key": "dev-admin-key"}
         appointments = client.get("/api/v1/admin/appointments", headers=admin_headers).json()
@@ -225,7 +258,7 @@ def test_voice_service_books_and_is_visible_to_admin():
         assert any(item["runtime_session_id"] == session_id and item["appointment_id"] == appointment["id"] for item in sessions)
 
 
-def test_voice_doctor_modes_come_from_schedules_not_profile_branches():
+def test_voice_doctor_modes_come_from_schedules_not_profile_branches(voice_enabled):
     with TestClient(app) as client:
         admin_headers = {"X-Admin-Key": "dev-admin-key"}
         service_headers = {"X-Service-Key": "dev-voice-service-key"}
