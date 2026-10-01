@@ -43,7 +43,10 @@ jobs:
           HMS_TEST_DATABASE_URL: postgresql+psycopg://avocado:avocado@127.0.0.1:5432/avocado
         run: |
           docker compose up -d --wait api
+          curl --fail http://127.0.0.1:8000/whatsapp-assets > /dev/null
+          curl --fail http://127.0.0.1:8000/whatsapp-operations.js > /dev/null
           npm --prefix whatsapp-bot run test:integration
+          HMS_OUTREACH_DATABASE_URL="$HMS_TEST_DATABASE_URL" uv run --locked pytest tests/test_whatsapp_outreach.py
       - name: Start coupled development bot container
         run: |
           python -c "from pathlib import Path; p = Path('whatsapp-bot/.env'); p.write_text(p.read_text().replace('replace-with-meta-phone-number-id', '123456789').replace('replace-with-version-from-meta-dashboard', 'v24.0'))"

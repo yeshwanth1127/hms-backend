@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     whatsapp_owner_secret: str = "dev-whatsapp-owner-secret"
     media_dir: str = "./uploads"
     media_scan_socket: str | None = None
+    whatsapp_test_recipients: str = ""
+    clinic_phone: str = ""
+    reception_hours: str = "Contact the clinic for reception hours."
+    reception_response: str = "Reception will reply during opening hours."
+    whatsapp_outreach_enabled: bool = False
 
     @property
     def origins(self) -> list[str]:

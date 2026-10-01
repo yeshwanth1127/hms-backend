@@ -13,6 +13,9 @@ class BranchOut(APIModel):
     slug: str
     name: str
     area: str
+    address: str = ""
+    directions_url: str = ""
+    arrival_instructions: str = ""
     timezone: str
     is_virtual: bool
 
@@ -93,6 +96,7 @@ class AppointmentCreate(BaseModel):
 
 
 class AppointmentOut(APIModel):
+    consultation_fee: int | None = None
     id: str
     confirmation_code: str
     patient_name: str
@@ -107,6 +111,9 @@ class AppointmentOut(APIModel):
 
 
 class WhatsAppAppointmentOut(AppointmentOut):
+    address: str = ""
+    directions_url: str = ""
+    arrival_instructions: str = ""
     doctor_name: str
     branch_name: str
     timezone: str
@@ -203,6 +210,8 @@ class WhatsAppHoldCreate(BaseModel):
 
 
 class WhatsAppAppointmentCreate(BaseModel):
+    expected_fee: int | None = Field(default=None, ge=0)
+    outreach_id: str | None = Field(default=None, max_length=36)
     sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
     hold_id: str
     patient_name: str = Field(min_length=2, max_length=160)

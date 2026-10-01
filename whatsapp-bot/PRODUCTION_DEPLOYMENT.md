@@ -40,3 +40,7 @@ The backend has illustrative seed doctors and schedules in development only. Pop
 - A production PostgreSQL migration and live device acceptance. SQLite tests and a local tunnel do not establish these outcomes.
 
 Meta's official [Cloud API collection](https://www.postman.com/meta/whatsapp-business-platform/documentation/wlk6lh4/whatsapp-cloud-api) describes production system-user tokens. The [Meta WhatsApp SDK webhook reference](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/webhooks/start/) documents challenge and signature checks. [ClamAV's INSTREAM protocol](https://docs.clamav.net/manual/Usage/ClamdProtocol.html) is used for upload scanning.
+
+## Outreach rollout
+
+Apply migration `0006_whatsapp_outreach` and follow [the outreach runbook](../WHATSAPP_OUTREACH.md). Both dispatch switches default off. Complete a verified test send and staff review before enabling patient campaigns. No UPI charge is implemented.

@@ -11,6 +11,7 @@ from .admin import router as admin_router
 from .integrations import router as integrations_router
 from .whatsapp import router as whatsapp_router
 from .whatsapp_admin import router as whatsapp_admin_router, page_router as whatsapp_page_router
+from .whatsapp_outreach import admin_router as outreach_admin_router, service_router as outreach_service_router
 from .config import settings
 from .db import Base, SessionLocal, engine
 from .seed import seed_catalogue
@@ -82,3 +83,6 @@ app.include_router(integrations_router)
 app.include_router(whatsapp_router)
 app.include_router(whatsapp_admin_router)
 app.include_router(whatsapp_page_router)
+
+app.include_router(outreach_admin_router)
+app.include_router(outreach_service_router)

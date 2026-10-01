@@ -118,3 +118,8 @@ def case_asset(asset_id: str, _: str = Depends(require_admin), db: Session = Dep
         raise DomainError("ASSET_MISSING", "Attachment is missing from storage.", 503)
     return FileResponse(path, media_type=asset.mime_type, filename=asset.original_name,
                         headers={"Cache-Control": "private, no-store"})
+
+
+@page_router.get("/whatsapp-operations.js", include_in_schema=False)
+def operations_script():
+    return FileResponse(Path(__file__).with_name("whatsapp_operations.js"), media_type="application/javascript", headers={"Cache-Control": "no-store"})

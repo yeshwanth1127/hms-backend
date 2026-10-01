@@ -33,6 +33,9 @@ class Branch(Base):
     slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(160))
     area: Mapped[str] = mapped_column(String(120))
+    address: Mapped[str] = mapped_column(String(500), default="")
+    directions_url: Mapped[str] = mapped_column(String(500), default="")
+    arrival_instructions: Mapped[str] = mapped_column(String(500), default="")
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
     is_virtual: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -115,6 +118,7 @@ class Appointment(Base):
     __tablename__ = "appointments"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     confirmation_code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    consultation_fee: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reservation_id: Mapped[str] = mapped_column(ForeignKey("reservations.id"), unique=True)
     patient_name: Mapped[str] = mapped_column(String(160))
     patient_phone: Mapped[str] = mapped_column(String(32))
@@ -254,3 +258,122 @@ class VoiceToolCall(Base):
     outcome: Mapped[str] = mapped_column(String(24), default="success")
     appointment_id: Mapped[str | None] = mapped_column(ForeignKey("appointments.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppContact(Base):
+    __tablename__ = "whatsapp_contacts"
+    sender_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    service_messages: Mapped[bool] = mapped_column(Boolean, default=False)
+    marketing: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    stopped_all: Mapped[bool] = mapped_column(Boolean, default=False)
+    language: Mapped[str] = mapped_column(String(16), default="en")
+    branch_id: Mapped[str | None] = mapped_column(ForeignKey("branches.id"), nullable=True, index=True)
+    interests: Mapped[list] = mapped_column(JSON, default=list)
+    last_inbound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppConsentEvent(Base):
+    __tablename__ = "whatsapp_consent_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    sender_id: Mapped[str] = mapped_column(ForeignKey("whatsapp_contacts.sender_id"), index=True)
+    source_message_id: Mapped[str] = mapped_column(String(120), unique=True)
+    choices: Mapped[dict] = mapped_column(JSON)
+    disclosure_version: Mapped[str] = mapped_column(String(40), default="2026-10-v1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppHandoff(Base):
+    __tablename__ = "whatsapp_handoffs"
+    sender_id: Mapped[str] = mapped_column(ForeignKey("whatsapp_contacts.sender_id"), primary_key=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("support_cases.id"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="waiting", index=True)
+    assigned_to: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppCaseMessage(Base):
+    __tablename__ = "whatsapp_case_messages"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    case_id: Mapped[str] = mapped_column(ForeignKey("support_cases.id"), index=True)
+    source_message_id: Mapped[str] = mapped_column(String(120), unique=True)
+    direction: Mapped[str] = mapped_column(String(16))
+    text: Mapped[str] = mapped_column(Text)
+    actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppTemplate(Base):
+    __tablename__ = "whatsapp_templates"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    language: Mapped[str] = mapped_column(String(16))
+    category: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24))
+    components: Mapped[list] = mapped_column(JSON)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppCampaign(Base):
+    __tablename__ = "whatsapp_campaigns"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    title: Mapped[str] = mapped_column(String(120))
+    template_id: Mapped[str] = mapped_column(ForeignKey("whatsapp_templates.id"), index=True)
+    template_fingerprint: Mapped[str] = mapped_column(String(64))
+    parameters: Mapped[list] = mapped_column(JSON)
+    asset_id: Mapped[str | None] = mapped_column(ForeignKey("media_assets.id"), nullable=True, index=True)
+    audience: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(24), default="draft", index=True)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    rate_paise: Mapped[int] = mapped_column(Integer)
+    budget_paise: Mapped[int] = mapped_column(Integer)
+    approved_count: Mapped[int] = mapped_column(Integer, default=0)
+    approved_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppOutbound(Base):
+    __tablename__ = "whatsapp_outbound"
+    __table_args__ = (Index("ix_whatsapp_outbound_claim", "status", "due_at"),
+                     Index("ix_whatsapp_outbound_frequency", "sender_id", "purpose", "sending_at"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    dedupe_key: Mapped[str] = mapped_column(String(160), unique=True)
+    sender_id: Mapped[str] = mapped_column(ForeignKey("whatsapp_contacts.sender_id"), index=True)
+    campaign_id: Mapped[str | None] = mapped_column(ForeignKey("whatsapp_campaigns.id"), nullable=True, index=True)
+    appointment_id: Mapped[str | None] = mapped_column(ForeignKey("appointments.id"), nullable=True, index=True)
+    case_id: Mapped[str | None] = mapped_column(ForeignKey("support_cases.id"), nullable=True, index=True)
+    template_id: Mapped[str | None] = mapped_column(ForeignKey("whatsapp_templates.id"), nullable=True, index=True)
+    template_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    parameters: Mapped[list] = mapped_column(JSON, default=list)
+    asset_id: Mapped[str | None] = mapped_column(ForeignKey("media_assets.id"), nullable=True, index=True)
+    purpose: Mapped[str] = mapped_column(String(32))
+    text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    claim_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sending_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    meta_message_id: Mapped[str | None] = mapped_column(String(120), nullable=True, unique=True)
+    last_error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    opted_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    engaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    converted_appointment_id: Mapped[str | None] = mapped_column(ForeignKey("appointments.id"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WhatsAppDeliveryReceipt(Base):
+    __tablename__ = "whatsapp_delivery_receipts"
+    meta_message_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24))
+    timestamp: Mapped[int] = mapped_column(Integer)
+
+
+class WhatsAppFollowupRule(Base):
+    __tablename__ = "whatsapp_followup_rules"
+    kind: Mapped[str] = mapped_column(String(32), primary_key=True)
+    template_id: Mapped[str] = mapped_column(ForeignKey("whatsapp_templates.id"), index=True)
+    template_fingerprint: Mapped[str] = mapped_column(String(64))
+    delay_hours: Mapped[int] = mapped_column(Integer, default=24)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -58,3 +58,8 @@ Set a distinct `WHATSAPP_SERVICE_API_KEY` and a long random `WHATSAPP_OWNER_SECR
 The direct public hold and appointment endpoints are disabled when `APP_ENV=production` until the website gains patient authentication. The authenticated voice and WhatsApp integration routes remain available. Reminder jobs are created only when the patient chooses reminder consent. The WhatsApp worker must have an approved utility template configured before it polls due jobs; a successful Meta send request records dispatch, not final delivery.
 
 This repository still seeds illustrative doctors and schedules in development, with schedules only at the first branch. Replace those records with approved clinic data before setting a bot to clinic-ready mode. Production requires PostgreSQL migrations, durable uploaded-file storage, service credentials, staff access controls, and a phone walkthrough; local API tests alone do not establish those conditions.
+
+## WhatsApp outreach and reception
+
+See [WHATSAPP_OUTREACH.md](WHATSAPP_OUTREACH.md) for consent, campaign approval,
+reception handoff, clinic details, follow-up contracts and rollout switches.

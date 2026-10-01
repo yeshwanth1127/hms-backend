@@ -20,6 +20,7 @@ MAX_ASSET_BYTES = 16 * 1024 * 1024
 MIME_LIMITS = {
     "guide": {"application/pdf": 10 * 1024 * 1024},
     "photo": {"image/png": 5 * 1024 * 1024, "image/jpeg": 5 * 1024 * 1024},
+    "campaign": {"application/pdf": 10 * 1024 * 1024, "image/png": 5 * 1024 * 1024, "image/jpeg": 5 * 1024 * 1024},
     "attachment": {
         "application/pdf": MAX_ASSET_BYTES,
         "image/png": MAX_ASSET_BYTES,

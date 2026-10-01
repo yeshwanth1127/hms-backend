@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .db import get_db
 from .media import asset_row, media_path, save_upload, scan_ready
+from .models import WhatsAppOutbound
 from .models import (Appointment, AppointmentStatusHistory, Branch, CaseAttachment, Department,
                      Doctor, MediaAsset, OutboxEvent, ReminderJob, Reservation, RescheduleOperation,
                      SupportCase, WhatsAppConversation, WhatsAppInbound, utcnow)
@@ -58,6 +59,8 @@ def _appointment_row(db: Session, item: Appointment) -> dict:
             base["reservation"][field] = _utc(base["reservation"][field])
     return {**base, "doctor_name": doctor.name if doctor else "Doctor",
             "branch_name": branch.name if branch else "Clinic",
+            "address": branch.address if branch else "", "directions_url": branch.directions_url if branch else "",
+            "arrival_instructions": branch.arrival_instructions if branch else "",
             "timezone": branch.timezone if branch else "Asia/Kolkata"}
 
 
@@ -95,6 +98,9 @@ def inbound_enqueue(body: WhatsAppInboundCreate, _: None = Depends(require_whats
         raise DomainError("INBOUND_TOO_LARGE", "Inbound message metadata is too large.", 413)
     if body.payload.get("id") != body.message_id or body.payload.get("from") != body.sender_id:
         raise DomainError("INBOUND_MISMATCH", "Message ID or sender does not match its payload.", 422)
+    from .whatsapp_outreach import ensure_contact
+    contact = ensure_contact(db, body.sender_id)
+    contact.last_inbound_at = utcnow()
     existing = db.get(WhatsAppInbound, body.message_id)
     if existing:
         if existing.sender_id != body.sender_id:
@@ -118,6 +124,7 @@ def inbound_enqueue(body: WhatsAppInboundCreate, _: None = Depends(require_whats
 @router.get("/inbound/ready")
 def inbound_ready(_: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
     db.execute(text("SELECT 1 FROM whatsapp_inbound LIMIT 1"))
+    db.execute(text("SELECT 1 FROM whatsapp_outbound LIMIT 1"))
     if settings.app_env == "production":
         scan_ready(settings.media_scan_socket)
     return {"ready": True}
@@ -286,18 +293,38 @@ def hold_release(hold_id: str, sender_id: str = Query(pattern=r"^[0-9]{7,20}$"),
 @router.post("/appointments", response_model=WhatsAppAppointmentOut, status_code=201)
 def appointment_create(body: WhatsAppAppointmentCreate, _: None = Depends(require_whatsapp_service),
                        db: Session = Depends(get_db)):
+    from .whatsapp_outreach import ensure_contact
+    ensure_contact(db, body.sender_id)
+    from .models import WhatsAppContact
+    db.scalar(select(WhatsAppContact).where(WhatsAppContact.sender_id == body.sender_id).with_for_update())
     key = owner_key(body.sender_id)
     existing = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
     if existing and (existing.reservation.owner_key != key or existing.reservation_id != body.hold_id
                      or existing.patient_name != body.patient_name.strip()
                      or existing.consent_to_reminders != body.consent_to_reminders):
         raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
+    hold = db.get(Reservation, body.hold_id)
+    if hold and hold.owner_key == key and not existing and body.expected_fee is not None:
+        doctor = db.scalar(select(Doctor).where(Doctor.id == hold.doctor_id).with_for_update(of=Doctor))
+        if doctor.consultation_fee != body.expected_fee:
+            raise DomainError("PRICE_CHANGED", "The consultation fee changed. Choose a new time and review the fee.", 409)
     appointment = confirm_appointment(db, AppointmentCreate(
         hold_id=body.hold_id, owner_key=key, patient_name=body.patient_name,
         patient_phone=f"+{body.sender_id}", origin_channel="whatsapp",
-        consent_to_reminders=body.consent_to_reminders, idempotency_key=body.idempotency_key))
-    if appointment.reservation.owner_key != key:
+        consent_to_reminders=body.consent_to_reminders, idempotency_key=body.idempotency_key), commit=False)
+    if (appointment.reservation.owner_key != key or appointment.reservation_id != body.hold_id
+            or appointment.patient_name != body.patient_name.strip() or appointment.consent_to_reminders != body.consent_to_reminders):
         raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
+    from .whatsapp_outreach import change_preferences, PreferenceChange
+    if body.consent_to_reminders:
+        source = "booking-consent:" + hashlib.sha256(body.idempotency_key.encode()).hexdigest()
+        change_preferences(db, body.sender_id, PreferenceChange(source_message_id=source,
+                           service_messages=True, stopped_all=False))
+    if body.outreach_id:
+        outreach = db.get(WhatsAppOutbound, body.outreach_id)
+        if outreach and outreach.sender_id == body.sender_id and outreach.engaged_at:
+            outreach.converted_appointment_id = appointment.id
+    db.commit()
     return _appointment_row(db, appointment)
 
 
@@ -440,7 +467,7 @@ async def case_attachment(case_id: str, sender_id: str = Form(pattern=r"^[0-9]{7
 @router.get("/assets/{asset_id}")
 def asset_download(asset_id: str, _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
     asset = db.get(MediaAsset, asset_id)
-    if not asset or not (db.scalar(select(Department.id).where(Department.guide_asset_id == asset_id))
+    if not asset or not ((asset.kind in ("campaign", "guide", "photo") and db.scalar(select(WhatsAppOutbound.id).where(WhatsAppOutbound.asset_id == asset_id).limit(1))) or db.scalar(select(Department.id).where(Department.guide_asset_id == asset_id))
                      or db.scalar(select(Doctor.id).where(Doctor.photo_asset_id == asset_id))):
         raise DomainError("ASSET_NOT_FOUND", "The asset was not found.", 404)
     path = media_path(asset.storage_name)
@@ -469,6 +496,11 @@ def reminders_due(limit: int = Query(20, ge=1, le=100), _: None = Depends(requir
     result = []
     for job in jobs:
         appointment = db.get(Appointment, job.appointment_id)
+        from .models import WhatsAppContact
+        contact = db.get(WhatsAppContact, job.sender_id)
+        if (contact and (contact.stopped_all or not contact.service_messages)):
+            job.status = "cancelled"
+            continue
         if (not appointment or appointment.status != "confirmed" or not appointment.consent_to_reminders
                 or _utc(appointment.reservation.starts_at) <= now):
             job.status = "cancelled"

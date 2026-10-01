@@ -14,6 +14,11 @@ services:
       WHATSAPP_SERVICE_API_KEY: ${WHATSAPP_SERVICE_API_KEY:-dev-whatsapp-service-key}
       WHATSAPP_OWNER_SECRET: ${WHATSAPP_OWNER_SECRET:-dev-whatsapp-owner-secret}
       MEDIA_DIR: /app/uploads
+      WHATSAPP_OUTREACH_ENABLED: ${WHATSAPP_OUTREACH_ENABLED:-false}
+      WHATSAPP_TEST_RECIPIENTS: ${WHATSAPP_TEST_RECIPIENTS:-}
+      CLINIC_PHONE: ${CLINIC_PHONE:-}
+      RECEPTION_HOURS: ${RECEPTION_HOURS:-Contact the clinic for reception hours.}
+      RECEPTION_RESPONSE: ${RECEPTION_RESPONSE:-Reception will reply during opening hours.}
     volumes:
       - media_uploads:/app/uploads
     depends_on:
