@@ -14,6 +14,7 @@ from .integrations import router as integrations_router
 from .whatsapp import router as whatsapp_router
 from .whatsapp_admin import router as whatsapp_admin_router, page_router as whatsapp_page_router
 from .whatsapp_outreach import admin_router as outreach_admin_router, service_router as outreach_service_router
+from .posthog_growth import router as posthog_growth_router
 from .growth import router as growth_router, page_router as growth_page_router
 from .client_modules import router as module_router
 from .staff_auth import router as staff_auth_router
@@ -112,3 +113,5 @@ app.include_router(staff_portal_router)
 app.include_router(growth_router)
 app.include_router(growth_page_router)
 app.include_router(module_router)
+
+app.include_router(posthog_growth_router)

@@ -1,3 +1,4 @@
+import { WebsiteActivity } from "./WebsiteActivity";
 import { useEffect, useState } from "react";
 import {
   ArrowRight,
@@ -361,15 +362,7 @@ export function GrowthModule({
               </div>
             </>
           )}
-          <Alert>
-            <AlertTitle>Visitor conversion is not connected yet</AlertTitle>
-            <AlertDescription>
-              PostHog visitor funnels and Google impressions are unavailable.
-              Booking counts alone cannot tell us what percentage of visitors
-              booked. Patient names, phone numbers and clinical details are
-              excluded from these reports.
-            </AlertDescription>
-          </Alert>
+          <WebsiteActivity api={api} />
         </>
       ) : (
         <Tabs

@@ -91,3 +91,7 @@ Use genuine device/browser checks before claiming complete accessibility. Local 
 Local tests cover permissions, live role/active/expiry changes, logout, CSRF on mutations, default-off and independent module flags, strict switch input, attribution privacy, branch/timezone reports, URL restrictions and named audit history. Fresh SQLite migration and TypeScript/production build are checked. The integration packet avoids duplicating the canonical staff schema.
 
 Provider OAuth, public profile visibility, real WhatsApp number, PostHog events, production PostgreSQL deployment and actual appointment delivery remain outside this local verification. The shared WhatsApp workstream owns integrating the final shell and enforcing its dispatch gates. This book should be updated after usability testing with a clinic administrator and a designated growth manager.
+
+## 14. PostHog activity alongside appointment outcomes
+
+Website engagement now has a separate PostHog card with production/demo controls, whole-website scope, per-event anonymous visitor counts and setup/unavailable states. It never presents absent data as zeros or labels independent activity counts as an ordered funnel. Current preview completions remain demo activity. Credentials stay in the backend's secret store, and the existing growth module/role permissions apply. Setup details and remaining provider verification are recorded in POSTHOG_BACKEND_INTEGRATION.md.

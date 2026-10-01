@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,6 +12,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     allowed_origins: str = "http://localhost:5567,http://127.0.0.1:5567"
     booking_allowed_origins: str = ""
+    posthog_growth_enabled: bool = False
+    posthog_api_host: str = "https://us.posthog.com"
+    posthog_project_id: int | None = Field(default=None, gt=0)
+    posthog_read_key: SecretStr = SecretStr("")
     staff_origin: str = ""
     slot_hold_minutes: int = 7
     admin_api_key: str = "dev-admin-key"
