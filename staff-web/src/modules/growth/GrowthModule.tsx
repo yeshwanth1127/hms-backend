@@ -53,6 +53,7 @@ export type GrowthUser = {
   active: boolean;
 };
 type Props = {
+  demo?: boolean;
   api: GrowthApi;
   user: GrowthUser;
   page: string;
@@ -122,6 +123,7 @@ export function GrowthModule({
   page,
   onNavigate,
   module = "google_business",
+  demo = false,
 }: Props) {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [links, setLinks] = useState<Link[]>([]);
@@ -152,7 +154,12 @@ export function GrowthModule({
       if (!live) return;
       setBranches(cat.branches);
       if (analytics) {
-        const data = await api<Summary>(prefix + "/growth/summary" + filters);
+        const data = await api<Summary>(
+          prefix +
+            "/growth/summary" +
+            filters +
+            (demo ? (filters ? "&" : "?") + "include_demo=true" : ""),
+        );
         if (live) setSummary(data);
       } else {
         const [linkData, caps, audit] = await Promise.all([
@@ -183,7 +190,7 @@ export function GrowthModule({
     return () => {
       live = false;
     };
-  }, [api, module, revision, filters, analytics]);
+  }, [api, module, revision, filters, analytics, demo]);
   const physical = branches.filter((b) => b.is_active && !b.is_virtual);
   const selected = physical.find((b) => b.id === branch);
   const retry = () => setRevision((v) => v + 1);
@@ -248,8 +255,9 @@ export function GrowthModule({
             <CardHeader>
               <CardTitle>Report scope</CardTitle>
               <CardDescription>
-                Production records only. Existing records with unverified
-                provenance are excluded.
+                {demo
+                  ? "Synthetic demo records from this isolated clinic database. Production records are kept separate."
+                  : "Production records only. Existing records with unverified provenance are excluded."}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -362,7 +370,7 @@ export function GrowthModule({
               </div>
             </>
           )}
-          <WebsiteActivity api={api} />
+          <WebsiteActivity api={api} demo={demo} />
         </>
       ) : (
         <Tabs

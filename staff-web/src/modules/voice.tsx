@@ -50,6 +50,8 @@ type History = {
     calls: number;
     bookings: number;
     errors: number;
+    completed: number;
+    tool_calls: number;
     period_days: number;
   };
   can_review_recordings: boolean;
@@ -127,6 +129,28 @@ function RecordingReview({ call }: { call: Call }) {
               : "Pending"}
           </dd>
         </div>
+        <div>
+          <dt className="text-muted-foreground">Last action</dt>
+          <dd className="mt-1">
+            {call.last_intent?.replaceAll("_", " ") ?? "Conversation started"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Turns / tools</dt>
+          <dd className="mt-1">
+            {call.turn_count} / {call.tool_call_count}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Call ended</dt>
+          <dd className="mt-1">
+            {call.ended_at ? dateTime(call.ended_at) : "In progress"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Session reference</dt>
+          <dd className="mt-1 break-all">{call.runtime_session_id}</dd>
+        </div>
       </dl>
       {error && <Notice title="Recording could not be opened" text={error} />}
       {url ? (
@@ -192,7 +216,7 @@ function RecordingAudit() {
     </Resource>
   );
 }
-export function VoiceModule() {
+export function VoiceModule({ demo = false }: { demo?: boolean }) {
   const [offset, setOffset] = useState(0),
     [selected, setSelected] = useState<Call | null>(null),
     [tab, setTab] = useState("calls");
@@ -212,7 +236,7 @@ export function VoiceModule() {
       <Resource {...r}>
         {r.data && (
           <>
-            {!r.data.configuration.calls_ready && (
+            {!demo && !r.data.configuration.calls_ready && (
               <Notice
                 title="Calling needs setup"
                 text="Configure the clinic’s Sarvam agent and approved version before patients can start calls."
@@ -226,11 +250,13 @@ export function VoiceModule() {
                 />
               )}
             <Card>
-              <CardContent className="grid grid-cols-3 gap-4 py-6">
+              <CardContent className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 py-6">
                 {[
                   ["Calls", r.data.summary.calls],
                   ["Bookings created", r.data.summary.bookings],
                   ["Call errors", r.data.summary.errors],
+                  ["Completed calls", r.data.summary.completed],
+                  ["Tool activity", r.data.summary.tool_calls],
                 ].map(([label, value]) => (
                   <div key={label}>
                     <p className="text-xs text-muted-foreground">
@@ -275,7 +301,8 @@ export function VoiceModule() {
                               </p>
                               <p className="text-xs text-muted-foreground mt-1">
                                 {call.channel === "phone" ? "Phone" : "Website"}{" "}
-                                · {call.turn_count} turns
+                                · {call.turn_count} turns ·{" "}
+                                {call.tool_call_count} tools
                               </p>
                             </TableCell>
                             <TableCell>
@@ -291,6 +318,10 @@ export function VoiceModule() {
                                   ? "Connecting"
                                   : call.status}
                               </Badge>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                {call.last_intent?.replaceAll("_", " ") ??
+                                  "Conversation started"}
+                              </p>
                             </TableCell>
                             <TableCell>
                               {call.appointment ? (

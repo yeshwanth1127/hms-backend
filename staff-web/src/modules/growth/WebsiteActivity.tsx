@@ -21,6 +21,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { GrowthApi } from "./GrowthModule";
 type Activity = {
+  synthetic?: boolean;
   status:
     | "disabled"
     | "not_configured"
@@ -32,8 +33,8 @@ type Activity = {
   filters: { start_date: string; end_date: string; timezone: string };
   retrieved_at: string | null;
 };
-export function WebsiteActivity({ api }: { api: GrowthApi }) {
-  const [traffic, setTraffic] = useState("production"),
+export function WebsiteActivity({ api, demo = false }: { api: GrowthApi; demo?: boolean }) {
+  const [traffic, setTraffic] = useState(demo ? "demo" : "production"),
     [revision, setRevision] = useState(0),
     [data, setData] = useState<Activity | null>(null),
     [loading, setLoading] = useState(true),
@@ -68,7 +69,7 @@ export function WebsiteActivity({ api }: { api: GrowthApi }) {
           <CardTitle>Website activity · PostHog</CardTitle>
           <Badge variant="outline">
             {configured
-              ? "Aggregate data available"
+              ? data?.synthetic ? "Synthetic sample activity" : "Aggregate data available"
               : loading
                 ? "Checking connection"
                 : "Not connected"}

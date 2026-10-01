@@ -9,6 +9,12 @@ router = APIRouter()
 STATIC = Path(__file__).with_name("staff_static")
 
 
+@router.get("/admin", include_in_schema=False)
+@router.get("/admin/{path:path}", include_in_schema=False)
+def legacy_admin(path: str = ""):
+    return RedirectResponse("/staff/appointments", status_code=307)
+
+
 @router.get("/staff", include_in_schema=False)
 def entry():
     return RedirectResponse("/staff/whatsapp")

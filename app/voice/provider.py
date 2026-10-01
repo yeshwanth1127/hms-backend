@@ -13,6 +13,10 @@ MAX_RECORDING_BYTES = 50 * 1024 * 1024
 
 
 def configured():
+    if settings.demo_mode:
+        from ..demo import guard
+        guard()
+        return True
     return bool(
         settings.sarvam_api_key.get_secret_value()
         and settings.sarvam_org_id
@@ -34,6 +38,8 @@ def scope_path():
 
 
 def request_json(path, params=None):
+    from ..demo import block_transport
+    block_transport()
     try:
         with httpx.Client(
             timeout=15, follow_redirects=False, trust_env=False
@@ -112,6 +118,12 @@ def mint():
 
 
 def recording_url(interaction_id):
+    if settings.demo_mode:
+        from ..demo import guard
+        guard()
+        if not interaction_id.startswith("demo-interaction-"):
+            raise DomainError("DEMO_AUDIO_UNAVAILABLE", "Only synthetic demo audio is available.", 404)
+        return "demo://sample-audio"
     # Sarvam documents the endpoint but not the response schema. Deployment must
     # set the exact verified field path; unknown shapes fail closed.
     field = settings.sarvam_recording_url_field
@@ -187,6 +199,17 @@ def validate_recording_url(url):
 
 
 def download_recording(url):
+    if settings.demo_mode:
+        from ..demo import guard
+        guard()
+        if url != "demo://sample-audio":
+            raise DomainError("DEMO_AUDIO_UNAVAILABLE", "Only synthetic demo audio is available.", 404)
+        import io, wave, math, struct
+        output = io.BytesIO()
+        with wave.open(output, "wb") as wav:
+            wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(16000)
+            wav.writeframes(b"".join(struct.pack("<h", int(900*math.sin(2*math.pi*440*i/16000))) for i in range(16000)))
+        return output.getvalue(), "audio/wav"
     validate_recording_url(url)
     try:
         with httpx.Client(

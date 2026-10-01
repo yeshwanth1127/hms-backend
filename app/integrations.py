@@ -23,6 +23,8 @@ router = APIRouter(prefix="/api/v1/integrations/voice", tags=["voice-integration
 
 
 def require_voice_runtime(x_service_key: str = Header(alias="X-Service-Key")) -> str:
+    from .demo import block_transport
+    block_transport()
     if not secrets.compare_digest(x_service_key, settings.voice_service_api_key):
         raise DomainError("SERVICE_AUTH_REQUIRED", "A valid voice service credential is required.", 401)
     return "voice-runtime"

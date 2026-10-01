@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import "./index.css";
 
 type Config = {
+  demo?: boolean;
   org_id: string;
   workspace_id: string;
   app_id: string;
@@ -117,7 +118,7 @@ function Talk() {
     await cleanup();
   }
   function start() {
-    if (!config || !consent || busy.current) return;
+    if (!config || config.demo || !consent || busy.current) return;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       setError(
         "Microphone access needs HTTPS or localhost. Please use website booking or contact reception.",
@@ -295,11 +296,11 @@ function Talk() {
               <Button
                 className="w-full"
                 size="lg"
-                disabled={!config || !consent}
+                disabled={!config || config.demo || !consent}
                 onClick={start}
               >
                 <Mic />
-                {phase === "ended" ? "Start another call" : "Start call"}
+                {config?.demo ? "Live calls disabled in demo" : phase === "ended" ? "Start another call" : "Start call"}
               </Button>
             )}
             <p className="text-xs text-muted-foreground leading-relaxed">

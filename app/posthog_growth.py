@@ -5,6 +5,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+from .db import get_db
+from .models import OutboxEvent
 
 from .config import settings
 from .staff_access import require_growth_read
@@ -52,7 +56,7 @@ def normalize_rows(data):
 @router.get("/website-activity")
 def website_activity(start_date: date | None = None, end_date: date | None = None,
                      traffic: Literal["production", "demo"] = "production",
-                     reporting_timezone: str = "Asia/Kolkata", _=Depends(require_growth_read)):
+                     reporting_timezone: str = "Asia/Kolkata", _=Depends(require_growth_read), db: Session = Depends(get_db)):
     try:
         tz = ZoneInfo(reporting_timezone)
     except (ZoneInfoNotFoundError, ValueError):
@@ -71,6 +75,20 @@ def website_activity(start_date: date | None = None, end_date: date | None = Non
                               "Frontend booking_preview_completed is a demo preview, not a persisted appointment.",
                               "The current frontend marks all events is_demo=true; production counts may be empty.",
                               "Website activity is global: current events do not provide branch attribution."]}
+    if settings.demo_mode:
+        from .demo import guard
+        guard(db)
+        if traffic != "demo":
+            return result
+        totals = {key: [key, 0, 0] for key in EVENTS}
+        for item in db.scalars(select(OutboxEvent).where(OutboxEvent.event_type == 'demo.website_activity')):
+            day = item.created_at.replace(tzinfo=timezone.utc) if item.created_at.tzinfo is None else item.created_at
+            if start <= day.astimezone(tz).date() <= end:
+                row = totals[item.payload['event']]
+                row[1] += item.payload['events']
+                row[2] += item.payload['visitors']
+        return {**result, "status": "available", "synthetic": True,
+                "rows": normalize_rows({"results": list(totals.values())}), "retrieved_at": datetime.now(timezone.utc)}
     if not settings.posthog_growth_enabled:
         return result
     if not settings.posthog_project_id or not settings.posthog_read_key.get_secret_value():

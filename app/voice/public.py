@@ -40,6 +40,7 @@ def config(response: Response, db: Session = Depends(get_db)):
         )
     response.headers["Cache-Control"] = "no-store"
     return {
+        "demo": settings.demo_mode,
         "org_id": settings.sarvam_org_id,
         "workspace_id": settings.sarvam_workspace_id,
         "app_id": settings.sarvam_app_id,
@@ -58,6 +59,8 @@ def config(response: Response, db: Session = Depends(get_db)):
 def start(
     body: Admission, request: Request, response: Response, db: Session = Depends(get_db)
 ):
+    from ..demo import block_transport
+    block_transport()
     origin_check(request)
     session, token = admit(db, request)
     response.set_cookie(

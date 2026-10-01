@@ -34,6 +34,9 @@ def require_whatsapp_service(request: Request, x_service_key: str = Header(alias
     if not secrets.compare_digest(x_service_key, settings.whatsapp_service_api_key):
         raise DomainError("SERVICE_AUTH_REQUIRED", "A valid WhatsApp service key is required.", 401)
 
+    from .demo import block_transport
+    block_transport()
+
     # Persist inbound events and delivery outcomes even while the module is off.
     path = request.url.path.removeprefix("/api/v1/integrations/whatsapp")
     intake = path in {"/inbound", "/inbound/ready", "/inbound/claim", "/outreach/claim", "/reminders/due", "/delivery-status"}

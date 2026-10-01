@@ -86,6 +86,7 @@ export type Branch = {
   name: string;
   area: string;
   is_active: boolean;
+  is_virtual?: boolean;
   address: string;
   directions_url: string;
   arrival_instructions: string;

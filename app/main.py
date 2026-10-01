@@ -29,6 +29,11 @@ from .services import DomainError
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if settings.demo_mode:
+        from .demo import guard
+        guard()
+    if settings.app_env == "demo" and not settings.demo_mode:
+        raise RuntimeError("APP_ENV=demo requires the isolated demo runner")
     if settings.app_env == "production":
         for name in ("admin_api_key", "voice_service_api_key", "whatsapp_service_api_key", "whatsapp_owner_secret"):
             value = getattr(settings, name)
@@ -119,3 +124,6 @@ app.include_router(growth_page_router)
 app.include_router(module_router)
 
 app.include_router(posthog_growth_router)
+
+from .demo.router import router as demo_router
+app.include_router(demo_router)

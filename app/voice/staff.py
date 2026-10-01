@@ -33,9 +33,9 @@ def recording_state(item):
     ):
         return "pending"
     if (
-        not provider.configured()
+        not settings.demo_mode and (not provider.configured()
         or not settings.sarvam_recording_url_field
-        or not settings.voice_recording_hosts
+        or not settings.voice_recording_hosts)
     ):
         return "not_configured"
     # Eligibility does not assert that the provider has processed the recording.
@@ -111,15 +111,17 @@ def history(
                 )
             ),
             "errors": counts.get("error", 0),
+            "completed": counts.get("completed", 0),
+            "tool_calls": db.scalar(select(func.sum(VoiceSession.tool_call_count)).where(VoiceSession.started_at >= since)) or 0,
             "period_days": 30,
         },
         "can_review_recordings": user.role == "admin",
         "configuration": {
-            "calls_ready": provider.configured(),
+            "calls_ready": provider.configured() and not settings.demo_mode,
             "recordings_ready": bool(
-                provider.configured()
+                settings.demo_mode or (provider.configured()
                 and settings.sarvam_recording_url_field
-                and settings.voice_recording_hosts
+                and settings.voice_recording_hosts)
             ),
             "access_days": settings.voice_recording_access_days,
             "agent_version": settings.sarvam_app_version,

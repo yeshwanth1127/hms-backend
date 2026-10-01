@@ -74,3 +74,7 @@ design rationale, trade-offs and verification boundaries.
 ## Optional Voice module
 
 Sarvam admission, call history and administrator recording review are bundled with the API. See [VOICE_MODULE.md](VOICE_MODULE.md) for the callback contract, recording setup, same-origin website routing and verification boundaries.
+
+## Unified dashboard and local demo
+
+See [DASHBOARD_MIGRATION.md](DASHBOARD_MIGRATION.md) for the former dashboard feature audit, one-workspace routing and disposable all-module demo.
