@@ -1,5 +1,7 @@
 from functools import lru_cache
+from pydantic import field_validator
 
+from pydantic import SecretStr, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +12,12 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./avocado.db"
     redis_url: str = "redis://localhost:6379/0"
     allowed_origins: str = "http://localhost:5567,http://127.0.0.1:5567"
+    booking_allowed_origins: str = ""
+    posthog_growth_enabled: bool = False
+    posthog_api_host: str = "https://us.posthog.com"
+    posthog_project_id: int | None = Field(default=None, gt=0)
+    posthog_read_key: SecretStr = SecretStr("")
+    staff_origin: str = ""
     slot_hold_minutes: int = 7
     admin_api_key: str = "dev-admin-key"
     voice_service_api_key: str = "dev-voice-service-key"
@@ -17,6 +25,11 @@ class Settings(BaseSettings):
     whatsapp_owner_secret: str = "dev-whatsapp-owner-secret"
     media_dir: str = "./uploads"
     media_scan_socket: str | None = None
+    whatsapp_test_recipients: str = ""
+    clinic_phone: str = ""
+    reception_hours: str = "Contact the clinic for reception hours."
+    reception_response: str = "Reception will reply during opening hours."
+    whatsapp_outreach_enabled: bool = False
 
     # Sarvam Voice Agents — used only by the public web wrapper to mint
     # short-lived signed WebSocket URLs. Never expose to the browser.
@@ -26,6 +39,12 @@ class Settings(BaseSettings):
     sarvam_app_id: str = ""
     sarvam_app_version: int | None = None
     sarvam_agent_display_name: str = "Aanya"
+
+    @field_validator("sarvam_app_version", mode="before")
+    @classmethod
+    def empty_sarvam_version(cls, value):
+        # An unconfigured optional version is blank in the deployment example.
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def origins(self) -> list[str]:

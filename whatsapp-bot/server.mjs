@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline';
 import { createDemoEngine } from './engine.mjs';
 import { createBackendClient } from './backend-client.mjs';
 import { createLiveEngine } from './live-engine.mjs';
-import { createMetaSender, incomingMessages, verifyMetaSignature } from './meta.mjs';
+import { createMetaSender, incomingMessages, incomingStatuses, verifyMetaSignature } from './meta.mjs';
 import { assertProductionConfig } from './production-config.mjs';
 
 const MAX_WEBHOOK_BYTES = 1024 * 1024;
@@ -26,7 +26,7 @@ function respond(response, status, body) {
 }
 
 export function createWebhookServer({ verifyToken, appSecret, phoneNumberId, sendText,
-  engine = createDemoEngine(), enqueueInbound, onEnqueued, checkReady }) {
+  engine = createDemoEngine(), enqueueInbound, onEnqueued, checkReady, recordDelivery }) {
   if (!verifyToken || !appSecret || !phoneNumberId || typeof sendText !== 'function') {
     throw new Error('Webhook server requires verification token, app secret, phone-number ID, and sender');
   }
@@ -43,7 +43,7 @@ export function createWebhookServer({ verifyToken, appSecret, phoneNumberId, sen
       if (previous) await previous.catch(() => {});
       if (sentInboundIds.has(message.id)) return;
       const reply = await engine.handleResponse(message);
-      if (typeof sendText.sendResponse === 'function') {
+      if (reply.kind === 'silent') { /* reception owns this conversation */ } else if (typeof sendText.sendResponse === 'function') {
         await sendText.sendResponse(message.from, reply, message.id);
       } else {
         await sendText(message.from, reply.text);
@@ -101,6 +101,7 @@ export function createWebhookServer({ verifyToken, appSecret, phoneNumberId, sen
     }
     const messages = incomingMessages(payload, phoneNumberId);
     try {
+      if (recordDelivery) for (const receipt of incomingStatuses(payload, phoneNumberId)) await recordDelivery(receipt);
       for (const message of messages) {
         if (enqueueInbound) {
           await enqueueInbound(message);
@@ -145,7 +146,8 @@ export function createInboundWorker({ backend, engine, sendText, log = console }
       const reply = await engine.handleResponse(payload);
       await backend.markInboundSending(id, token);
       sending = true;
-      if (typeof sendText.sendResponse === 'function') await sendText.sendResponse(job.sender_id, reply, id);
+      if (reply.kind === 'silent') { /* persist completion without a bot reply */ }
+      else if (typeof sendText.sendResponse === 'function') await sendText.sendResponse(job.sender_id, reply, id);
       else await sendText(job.sender_id, reply.text);
       await backend.markInboundSent(id, token);
     } catch (error) {
@@ -154,6 +156,31 @@ export function createInboundWorker({ backend, engine, sendText, log = console }
       try { await backend.markInboundFailed(id, token, error.message); }
       catch (reportError) { log.error(`Inbound status update failed: ${reportError.message}`); }
       log.error(`Inbound ${sending ? 'delivery' : 'processing'} failed for ${id}: ${error.message}`);
+    }
+    return true;
+  };
+}
+
+export function createOutreachWorker({ backend, sendText, log = console }) {
+  return async function processOne() {
+    const job = await backend.claimOutreach();
+    if (!job) return false;
+    try {
+      const asset = job.asset_id ? await backend.asset(job.asset_id) : null;
+      // Resolve media first, then recheck consent immediately before any send.
+      const authorization = await backend.authorizeOutreach(job.id, job.claim_token);
+      if (!authorization.send) return true;
+      const receipt = job.purpose === 'staff' ? await sendText(job.sender_id, job.text)
+        : await sendText.sendTemplate(job.sender_id, job.template.name, job.template.language, job.parameters, {
+          buttons: job.buttons,
+          ...(asset ? { header: { type: job.header_type, source: { id: job.asset_id, bytes: asset.bytes, mimeType: asset.mimeType, filename: asset.filename || (asset.mimeType === 'application/pdf' ? 'clinic-guide.pdf' : 'clinic-image.jpg') } } } : {}),
+        });
+      if (!receipt?.messages?.[0]?.id) throw new Error('Outbound send returned no message ID');
+      await backend.completeOutreach(job.id, job.claim_token, receipt.messages[0].id);
+    } catch (error) {
+      try { await backend.failOutreach(job.id, job.claim_token, error.message.slice(0, 240)); }
+      catch (reportError) { log.error(`Outreach status update failed: ${reportError.message}`); }
+      log.error(`Outreach delivery needs review for ${job.id}`);
     }
     return true;
   };
@@ -185,6 +212,7 @@ function startFromEnvironment() {
   let wakeWorker = () => {};
   const app = createWebhookServer({ ...config, sendText, engine,
     enqueueInbound: backend?.enqueueInbound,
+    recordDelivery: backend?.deliveryStatus,
     onEnqueued: () => wakeWorker(),
     checkReady: backend ? backend.inboundReady : undefined,
   });
@@ -230,14 +258,44 @@ function startFromEnvironment() {
     timers.push(setInterval(wakeWorker, 10000));
     wakeWorker();
   }
-  if (backend && process.env.WA_CLINIC_READY === 'true' && process.env.WA_REMINDER_TEMPLATE_NAME) {
+  if (backend && process.env.WA_BUSINESS_ACCOUNT_ID) {
+    let syncing = false;
+    const sync = async () => {
+      if (syncing || stopping) return;
+      syncing = true;
+      try { await backend.syncTemplates(await sendText.listTemplates(process.env.WA_BUSINESS_ACCOUNT_ID)); }
+      catch { console.error('Template sync failed; campaigns require a fresh approved inventory.'); }
+      finally { syncing = false; }
+    };
+    timers.push(setInterval(() => runTracked(sync), 60 * 60 * 1000));
+    runTracked(sync);
+  }
+  if (backend && process.env.WA_OUTREACH_ENABLED === 'true') {
+    const processOne = createOutreachWorker({ backend, sendText });
+    let busy = false;
     const poll = async () => {
-      if (stopping) return;
+      if (busy || stopping) return;
+      busy = true;
+      try { while (!stopping && await processOne()) { /* drain due, approved jobs */ } }
+      catch { console.error('Outreach queue unavailable; pending jobs remain in the backend.'); }
+      finally { busy = false; }
+    };
+    timers.push(setInterval(() => runTracked(poll), 30000));
+    runTracked(poll);
+  }
+  if (backend && process.env.WA_CLINIC_READY === 'true' && process.env.WA_REMINDER_TEMPLATE_NAME) {
+    let reminderBusy = false;
+    const poll = async () => {
+      if (stopping || reminderBusy) return;
+      reminderBusy = true;
       try {
         const jobs = await backend.dueReminders();
         for (const job of jobs) {
           let sending = false;
           try {
+            const authorization = await backend.authorizeReminder(job.id);
+            if (!authorization.send) continue;
+            Object.assign(job, authorization);
             const formatted = new Intl.DateTimeFormat('en-IN', {
               timeZone: job.timezone, dateStyle: 'medium', timeStyle: 'short',
             }).format(new Date(job.starts_at));
@@ -258,7 +316,7 @@ function startFromEnvironment() {
         }
       } catch (error) {
         console.error(`Reminder poll failed: ${error.message}`);
-      }
+      } finally { reminderBusy = false; }
     };
     timers.push(setInterval(() => runTracked(poll), 60000));
     runTracked(poll);

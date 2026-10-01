@@ -69,6 +69,15 @@ export function incomingMessages(payload, expectedPhoneNumberId) {
   }));
 }
 
+export function incomingStatuses(payload, expectedPhoneNumberId) {
+  if (payload?.object !== 'whatsapp_business_account') return [];
+  return (Array.isArray(payload.entry) ? payload.entry : []).flatMap(entry => (Array.isArray(entry?.changes) ? entry.changes : []).flatMap(change => {
+    const value = change?.value;
+    if (String(value?.metadata?.phone_number_id ?? '') !== String(expectedPhoneNumberId)) return [];
+    return (Array.isArray(value.statuses) ? value.statuses : []).filter(item => typeof item?.id === 'string' && item.id.length >= 8 && item.id.length <= 120 && ['sent', 'delivered', 'read', 'failed'].includes(item.status) && /^\d{1,10}$/.test(String(item.timestamp)) && Number(item.timestamp) <= 2147483647).map(item => ({ meta_message_id: item.id, status: item.status, timestamp: Number(item.timestamp) }));
+  }));
+}
+
 export function createMetaSender({ accessToken, phoneNumberId, graphVersion,
   welcomeImagePath = DEFAULT_WELCOME_IMAGE, fetchImpl = fetch }) {
   if (!accessToken || !/^\d+$/.test(String(phoneNumberId)) || !/^v\d+\.\d+$/.test(graphVersion ?? '')) {
@@ -80,7 +89,7 @@ export function createMetaSender({ accessToken, phoneNumberId, graphVersion,
 
   async function postJson(payload) {
     const response = await fetchImpl(url, {
-      method: 'POST',
+      method: 'POST', redirect: 'error',
       headers: {
         authorization: `Bearer ${accessToken}`,
         'content-type': 'application/json',
@@ -235,11 +244,37 @@ export function createMetaSender({ accessToken, phoneNumberId, graphVersion,
   };
 
   sendText.downloadMedia = downloadMedia;
-  sendText.sendTemplate = async (to, name, language, parameters) => postJson({
-    messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'template',
-    template: { name, language: { code: language }, components: [{ type: 'body',
-      parameters: parameters.map((value) => ({ type: 'text', text: String(value) })) }] },
-  });
+  sendText.sendTemplate = async (to, name, language, parameters = [], options = {}) => {
+    const components = [];
+    if (options.header) {
+      const mediaId = await uploadMedia(options.header.source);
+      const type = options.header.type.toLowerCase();
+      if (!['image', 'document'].includes(type)) throw new Error('Unsupported template header');
+      components.push({ type: 'header', parameters: [{ type, [type]: { id: mediaId, ...(type === 'document' ? { filename: options.header.source.filename } : {}) } }] });
+    }
+    if (parameters.length) components.push({ type: 'body', parameters: parameters.map(value => ({ type: 'text', text: String(value) })) });
+    for (const button of options.buttons ?? []) components.push({ type: 'button', sub_type: 'quick_reply', index: String(button.index), parameters: [{ type: 'payload', payload: button.payload }] });
+    return postJson({ messaging_product: 'whatsapp', recipient_type: 'individual', to, type: 'template',
+      template: { name, language: { code: language }, ...(components.length ? { components } : {}) } });
+  };
+  sendText.listTemplates = async (businessAccountId) => {
+    if (!/^\d+$/.test(String(businessAccountId))) throw new Error('A numeric WhatsApp Business Account ID is required');
+    let next = `https://graph.facebook.com/${graphVersion}/${businessAccountId}/message_templates?limit=100&fields=id,name,language,status,category,components`;
+    const items = [], seen = new Set();
+    while (next) {
+      const parsed = new URL(next);
+      if (parsed.protocol !== 'https:' || parsed.hostname !== 'graph.facebook.com' || parsed.username || parsed.password || parsed.pathname !== `/${graphVersion}/${businessAccountId}/message_templates` || seen.has(next) || seen.size >= 20) throw new Error('Unsafe or incomplete template pagination');
+      seen.add(next);
+      const response = await fetchImpl(parsed, { headers: { authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(20000), redirect: 'error' });
+      if (!response.ok) throw new Error(`Meta template sync failed with HTTP ${response.status}`);
+      const data = await response.json();
+      if (!Array.isArray(data.data)) throw new Error('Meta returned an invalid template inventory');
+      items.push(...data.data);
+      if (items.length > 1000) throw new Error('Template inventory exceeds the supported limit');
+      next = data.paging?.next ?? null;
+    }
+    return items;
+  };
 
   return sendText;
 }

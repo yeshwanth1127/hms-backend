@@ -15,3 +15,7 @@ htmlcov/
 **/.env.*
 !**/.env.example
 **/node_modules/
+
+app/staff_static/
+staff-web/.vite/
+.local/

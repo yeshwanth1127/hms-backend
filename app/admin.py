@@ -1,8 +1,9 @@
 import secrets
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -11,7 +12,7 @@ from .db import get_db
 from .models import (
     Appointment, AppointmentStatusHistory, Branch, Department, Doctor, OutboxEvent,
     Reservation, ScheduleRule,
-    VoiceSession,
+    VoiceSession, utcnow,
 )
 from .schemas import AppointmentStatusUpdate, DoctorAdminUpdate, ScheduleRuleCreate, ScheduleRuleOut
 from .services import DomainError
@@ -19,13 +20,22 @@ from .services import DomainError
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
-def require_admin(x_admin_key: str = Header(alias="X-Admin-Key")) -> str:
-    if not secrets.compare_digest(x_admin_key, settings.admin_api_key):
-        raise DomainError("ADMIN_AUTH_REQUIRED", "A valid administrator key is required.", 401)
-    return "local-admin"
+def require_admin(request: Request, x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"), db: Session = Depends(get_db)) -> str:
+    # Legacy keys remain server-to-server compatibility only; the staff UI uses cookies.
+    if x_admin_key and secrets.compare_digest(x_admin_key, settings.admin_api_key):
+        return "local-admin"
+    from .staff_auth import current_staff
+    user, _ = current_staff(request, db, mutate=request.method not in ("GET", "HEAD", "OPTIONS"))
+    if user.role not in ("admin", "staff"):
+        raise DomainError("STAFF_PERMISSION_DENIED", "Your account does not have access to clinic operations.", 403)
+    return user.id
 
 
 def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _utc(value):
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
@@ -38,8 +48,8 @@ def _appointment_row(db: Session, item: Appointment) -> dict:
         "patient_name": item.patient_name, "patient_phone": item.patient_phone,
         "patient_email": item.patient_email, "reason": item.reason,
         "status": item.status, "origin_channel": item.origin_channel,
-        "created_at": item.created_at, "starts_at": reservation.starts_at,
-        "ends_at": reservation.ends_at, "consultation_type": reservation.consultation_type,
+        "created_at": _utc(item.created_at), "starts_at": _utc(reservation.starts_at),
+        "ends_at": _utc(reservation.ends_at), "consultation_type": reservation.consultation_type,
         "doctor": {"id": doctor.id, "name": doctor.name} if doctor else None,
         "branch": {"id": branch.id, "name": branch.name, "area": branch.area} if branch else None,
     }
@@ -88,23 +98,34 @@ def analytics(_: str = Depends(require_admin), db: Session = Depends(get_db)):
 
 @router.get("/appointments")
 def appointments(status: str | None = None, query: str | None = None,
+                 day: date | None = None, doctor_id: str | None = None,
+                 branch_id: str | None = None, offset: int = Query(0, ge=0),
                  limit: int = Query(100, ge=1, le=500), _: str = Depends(require_admin),
                  db: Session = Depends(get_db)):
-    statement = select(Appointment).order_by(Appointment.created_at.desc()).limit(limit)
+    statement = select(Appointment).join(Reservation, Appointment.reservation_id == Reservation.id).join(Doctor, Reservation.doctor_id == Doctor.id)
+    if day:
+        start = datetime.combine(day, datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata"))
+        statement = statement.where(Reservation.starts_at >= start.astimezone(timezone.utc),
+                                    Reservation.starts_at < (start + timedelta(days=1)).astimezone(timezone.utc))
+    if doctor_id:
+        statement = statement.where(Reservation.doctor_id == doctor_id)
+    if branch_id:
+        statement = statement.where(Reservation.branch_id == branch_id)
     if status and status != "all":
         statement = statement.where(Appointment.status == status)
-    if query:
+    if query and query.strip():
         pattern = f"%{query.strip()}%"
         statement = statement.where(or_(Appointment.patient_name.ilike(pattern),
                                         Appointment.patient_phone.ilike(pattern),
-                                        Appointment.confirmation_code.ilike(pattern)))
+                                        Appointment.confirmation_code.ilike(pattern), Doctor.name.ilike(pattern)))
+    statement = statement.order_by(Reservation.starts_at, Appointment.id).offset(offset).limit(limit)
     return [_appointment_row(db, item) for item in db.scalars(statement).all()]
 
 
 @router.patch("/appointments/{appointment_id}/status")
 def appointment_status(appointment_id: str, body: AppointmentStatusUpdate,
                        admin_id: str = Depends(require_admin), db: Session = Depends(get_db)):
-    item = db.get(Appointment, appointment_id)
+    item = db.scalar(select(Appointment).where(Appointment.id == appointment_id).with_for_update(of=Appointment))
     if not item:
         raise DomainError("APPOINTMENT_NOT_FOUND", "Appointment was not found.", 404)
     allowed = {
@@ -116,6 +137,10 @@ def appointment_status(appointment_id: str, body: AppointmentStatusUpdate,
         return _appointment_row(db, item)
     if body.status not in allowed.get(item.status, set()):
         raise DomainError("INVALID_STATUS_TRANSITION", f"Cannot change {item.status} to {body.status}.", 409)
+    visit_start = item.reservation.starts_at
+    visit_start = visit_start.replace(tzinfo=timezone.utc) if visit_start.tzinfo is None else visit_start.astimezone(timezone.utc)
+    if body.status in {"completed", "no_show"} and visit_start > utcnow():
+        raise DomainError("VISIT_NOT_STARTED", "A future visit cannot be marked completed or no-show.", 409)
     previous = item.status
     item.status = body.status
     if body.status == "cancelled":
@@ -124,6 +149,9 @@ def appointment_status(appointment_id: str, body: AppointmentStatusUpdate,
                                     actor_type="administrator", actor_id=admin_id, reason=body.reason))
     db.add(OutboxEvent(event_type=f"appointment.{body.status}", aggregate_id=item.id,
                        payload={"appointment_id": item.id, "confirmation_code": item.confirmation_code}))
+    if body.status in {"completed", "no_show"}:
+        from .whatsapp_outreach import queue_followup
+        queue_followup(db, item, "feedback" if body.status == "completed" else "no_show")
     db.commit()
     db.refresh(item)
     return _appointment_row(db, item)
@@ -187,7 +215,7 @@ def delete_schedule(schedule_id: str, _: str = Depends(require_admin), db: Sessi
 @router.get("/catalogue")
 def catalogue(_: str = Depends(require_admin), db: Session = Depends(get_db)):
     return {
-        "branches": [{"id": item.id, "name": item.name, "area": item.area, "is_active": item.is_active}
+        "branches": [{"id": item.id, "name": item.name, "area": item.area, "is_active": item.is_active, "address": item.address, "directions_url": item.directions_url, "arrival_instructions": item.arrival_instructions}
                      for item in db.scalars(select(Branch).order_by(Branch.name)).all()],
         "departments": [{"id": item.id, "name": item.name, "slug": item.slug, "is_active": item.is_active}
                         for item in db.scalars(select(Department).order_by(Department.name)).all()],

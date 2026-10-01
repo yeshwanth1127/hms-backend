@@ -17,6 +17,7 @@ export function assertProductionConfig(env) {
   }
   if (!/^\d+$/.test(env.WA_PHONE_NUMBER_ID ?? '')) fail('WA_PHONE_NUMBER_ID must be numeric');
   if (!/^v\d+\.\d+$/.test(env.WA_GRAPH_VERSION ?? '')) fail('WA_GRAPH_VERSION is required');
+  if (env.WA_OUTREACH_ENABLED === 'true' && !/^\d+$/.test(env.WA_BUSINESS_ACCOUNT_ID ?? '')) fail('WA_BUSINESS_ACCOUNT_ID must be numeric when outreach is enabled');
   const image = env.WA_WELCOME_IMAGE_PATH;
   if (!image || !isAbsolute(image) || !existsSync(image) || realpathSync(image) === bundledDemoImage) {
     fail('WA_WELCOME_IMAGE_PATH must be an existing, approved absolute path');

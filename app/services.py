@@ -118,13 +118,17 @@ def create_hold(db: Session, body: HoldCreate) -> Reservation:
     return hold
 
 
-def confirm_appointment(db: Session, body: AppointmentCreate) -> Appointment:
+def confirm_appointment(db: Session, body: AppointmentCreate, *, commit: bool = True) -> Appointment:
     existing = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
     if existing:
         return existing
     hold = db.scalar(select(Reservation).where(Reservation.id == body.hold_id).with_for_update())
     if not hold or hold.owner_key != body.owner_key:
         raise DomainError("HOLD_NOT_FOUND", "The slot hold was not found.", 404)
+    # A concurrent request may have committed while we waited for the hold.
+    existing = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
+    if existing:
+        return existing
     now = utcnow()
     expires_at = hold.expires_at
     if expires_at and expires_at.tzinfo is None:
@@ -136,9 +140,11 @@ def confirm_appointment(db: Session, body: AppointmentCreate) -> Appointment:
         raise DomainError("HOLD_EXPIRED", "The slot hold has expired. Please select a new time.", 409)
     appointment = Appointment(
         confirmation_code=f"AVO-{secrets.token_hex(8).upper()}", reservation_id=hold.id,
+        consultation_fee=db.get(Doctor, hold.doctor_id).consultation_fee,
         patient_name=body.patient_name.strip(), patient_phone=body.patient_phone.strip(),
         patient_email=str(body.patient_email) if body.patient_email else None,
         reason=body.reason.strip() if body.reason else None, origin_channel=body.origin_channel,
+        acquisition_source=body.acquisition_source, is_demo=settings.app_env != "production",
         consent_to_reminders=body.consent_to_reminders,
         idempotency_key=body.idempotency_key, status="confirmed",
     )
@@ -155,7 +161,10 @@ def confirm_appointment(db: Session, body: AppointmentCreate) -> Appointment:
         db.add(ReminderJob(appointment_id=appointment.id, sender_id=body.patient_phone.lstrip("+"),
                            due_at=due_at, status="pending", attempts=0))
     try:
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
     except IntegrityError as exc:
         db.rollback()
         replay = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))

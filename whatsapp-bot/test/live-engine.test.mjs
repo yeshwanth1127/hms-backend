@@ -5,18 +5,25 @@ import { BackendError } from '../backend-client.mjs';
 
 const department = { id: 'dept-1', slug: 'cardiology', name: 'Cardiology', tagline: 'Heart care', guide_asset_id: 'guide-1' };
 const branch = { id: 'branch-1', slug: 'indiranagar', name: 'Indiranagar Clinic', area: 'Indiranagar', timezone: 'Asia/Kolkata', is_virtual: false };
-const doctor = { id: 'doctor-1', slug: 'doctor-one', name: 'Dr. One', title: 'Cardiologist', bio: 'Heart care', photo_asset_id: 'photo-1' };
+const doctor = { id: 'doctor-1', slug: 'doctor-one', name: 'Dr. One', title: 'Cardiologist', bio: 'Heart care', consultation_fee: 1000, photo_asset_id: 'photo-1' };
 const slots = [
   { doctor_id: doctor.id, branch_id: branch.id, consultation_type: 'in_person', starts_at: '2026-10-02T04:00:00Z', ends_at: '2026-10-02T04:30:00Z' },
   { doctor_id: doctor.id, branch_id: branch.id, consultation_type: 'in_person', starts_at: '2026-10-02T04:30:00Z', ends_at: '2026-10-02T05:00:00Z' },
 ];
 
 function fakeBackend() {
+  const prefs = { service_messages: false, marketing: false, stopped_all: false, handoff: null };
   const appointments = [];
   const calls = [];
   const conversations = new Map();
   return {
     calls, appointments,
+    preferences: async () => ({ ...prefs, reception: { hours: '9 am–6 pm', response: 'We reply during opening hours.', phone: '08012345678' } }),
+    changePreferences: async (_sender, body) => { Object.assign(prefs, body); if (body.stopped_all) { prefs.marketing = false; prefs.service_messages = false; } calls.push(['preferences', body]); return prefs; },
+    reception: async () => { prefs.handoff = { case_id: 'case-reception', status: 'waiting' }; return prefs.handoff; },
+    receptionMessage: async body => { calls.push(['receptionMessage', body]); },
+    resumeReception: async () => { prefs.handoff = null; },
+    engageOutreach: async (...args) => { calls.push(['engagement', args]); },
     loadConversation: async (sender) => structuredClone(conversations.get(sender) ?? {
       state: { step: 'menu', draft: {} }, last_message_id: null, last_reply: null,
     }),
@@ -55,7 +62,10 @@ test('backend mode sends uploaded guide and doctor photo, then books and manages
   const backend = fakeBackend();
   const engine = createLiveEngine({ backend, clinicReady: true, now: () => new Date('2026-09-29T10:00:00Z') });
   let n = 0;
-  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  let lastReply;
+  const send = async (choiceId, text = '') => {
+    if (/^slot\.\d+$/.test(choiceId ?? '')) { const menu = lastReply?.kind === 'sequence' ? lastReply.messages.at(-1) : lastReply; choiceId = menu.sections?.flatMap(section => section.rows).find(row => row.id.startsWith(choiceId + '.'))?.id ?? choiceId; }
+    lastReply = await engine.handleResponse({ id: `wamid.${++n}`, from: '919811111111', type: 'text', choiceId, text }); return lastReply; };
   assert.equal((await send(null, 'hi')).kind, 'buttons');
   assert.equal((await send('menu.book')).kind, 'list');
   const guide = await send('specialty.cardiology');
@@ -88,7 +98,10 @@ test('production rejects stale confirmation buttons and typed yes', async () => 
   const backend = fakeBackend();
   const engine = createLiveEngine({ backend, clinicReady: true, now: () => new Date('2026-09-29T10:00:00Z') });
   let n = 0;
-  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.safe-${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  let lastReply;
+  const send = async (choiceId, text = '') => {
+    if (/^slot\.\d+$/.test(choiceId ?? '')) { const menu = lastReply?.kind === 'sequence' ? lastReply.messages.at(-1) : lastReply; choiceId = menu.sections?.flatMap(section => section.rows).find(row => row.id.startsWith(choiceId + '.'))?.id ?? choiceId; }
+    lastReply = await engine.handleResponse({ id: `wamid.safe-${++n}`, from: '919811111111', type: 'text', choiceId, text }); return lastReply; };
   await send(null, 'hi');
   await send('menu.book');
   await send('specialty.cardiology');
@@ -112,7 +125,10 @@ test('an old booking confirmation expires without creating an appointment', asyn
   let time = new Date('2026-09-29T10:00:00Z');
   const engine = createLiveEngine({ backend, clinicReady: true, now: () => time });
   let n = 0;
-  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.expiry-${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  let lastReply;
+  const send = async (choiceId, text = '') => {
+    if (/^slot\.\d+$/.test(choiceId ?? '')) { const menu = lastReply?.kind === 'sequence' ? lastReply.messages.at(-1) : lastReply; choiceId = menu.sections?.flatMap(section => section.rows).find(row => row.id.startsWith(choiceId + '.'))?.id ?? choiceId; }
+    lastReply = await engine.handleResponse({ id: `wamid.expiry-${++n}`, from: '919811111111', type: 'text', choiceId, text }); return lastReply; };
   await send(null, 'hi');
   await send('menu.book');
   await send('specialty.cardiology');
@@ -130,7 +146,10 @@ test('production visit management requires a booking reference and expires that 
   let time = new Date('2026-09-29T10:00:00Z');
   const engine = createLiveEngine({ backend, clinicReady: true, requireReference: true, now: () => time });
   let n = 0;
-  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.reference-${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  let lastReply;
+  const send = async (choiceId, text = '') => {
+    if (/^slot\.\d+$/.test(choiceId ?? '')) { const menu = lastReply?.kind === 'sequence' ? lastReply.messages.at(-1) : lastReply; choiceId = menu.sections?.flatMap(section => section.rows).find(row => row.id.startsWith(choiceId + '.'))?.id ?? choiceId; }
+    lastReply = await engine.handleResponse({ id: `wamid.reference-${++n}`, from: '919811111111', type: 'text', choiceId, text }); return lastReply; };
   assert.equal((await send(null, 'hi')).buttons[1].title, 'Open a visit');
   await send('menu.book');
   await send('specialty.cardiology');
@@ -154,7 +173,10 @@ test('backend mode records issues, feedback, and a media attachment for staff', 
   const backend = fakeBackend();
   const engine = createLiveEngine({ backend, downloadMedia: async () => ({ bytes: Buffer.from('image'), mimeType: 'image/png', filename: 'image.png' }) });
   let n = 0;
-  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  let lastReply;
+  const send = async (choiceId, text = '') => {
+    if (/^slot\.\d+$/.test(choiceId ?? '')) { const menu = lastReply?.kind === 'sequence' ? lastReply.messages.at(-1) : lastReply; choiceId = menu.sections?.flatMap(section => section.rows).find(row => row.id.startsWith(choiceId + '.'))?.id ?? choiceId; }
+    lastReply = await engine.handleResponse({ id: `wamid.${++n}`, from: '919811111111', type: 'text', choiceId, text }); return lastReply; };
   await send('menu.issue');
   assert.match((await send(null, 'Please call me')).text, /staff review/);
   await send('menu.feedback');
@@ -181,4 +203,74 @@ test('backend mode restores a choice and media reply after a bot restart', async
   assert.deepEqual(replay.messages[0].media.bytes, Buffer.from('guide-1'));
   assert.equal((await third.handleResponse({ id: 'wamid.restart-3', from: '919811111111', type: 'text',
     choiceId: 'branch.indiranagar', text: '' })).kind, 'list');
+});
+
+
+test('separate opt-ins, STOP, reception pause and resume preserve the patient’s choices', async () => {
+  const backend = fakeBackend(), engine = createLiveEngine({ backend });
+  let n = 0;
+  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.preferences-${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  const prefs = await send('menu.preferences');
+  assert.match(prefs.body, /Visit reminders and follow-ups: off/);
+  await send('prefs.service.on');
+  assert.equal((await backend.preferences()).service_messages, true);
+  assert.equal((await backend.preferences()).marketing, false);
+  await send('prefs.marketing.on');
+  await send(null, 'STOP OFFERS');
+  assert.equal((await backend.preferences()).service_messages, true);
+  assert.equal((await backend.preferences()).marketing, false);
+  const handoff = await send('menu.reception');
+  assert.match(handoff.body, /bot is paused/);
+  assert.equal((await send(null, 'I need to change my visit')).kind, 'silent');
+  assert.equal(backend.calls.at(-1)[0], 'receptionMessage');
+  assert.equal((await send('reception.resume')).kind, 'buttons');
+  await send(null, 'STOP');
+  assert.equal((await backend.preferences()).service_messages, false);
+  assert.equal((await send(null, 'hi')).kind, 'buttons');
+});
+
+test('doctor browsing does not force booking and slot menus paginate, accept dates and reject stale taps', async () => {
+  const backend = fakeBackend();
+  const many = Array.from({ length: 18 }, (_, n) => ({ ...slots[0], starts_at: new Date(Date.parse(slots[0].starts_at) + n * 1800000).toISOString(), ends_at: new Date(Date.parse(slots[0].ends_at) + n * 1800000).toISOString() }));
+  backend.availability = async () => ({ slots: many });
+  const engine = createLiveEngine({ backend, clinicReady: true, now: () => new Date('2026-10-01T04:00:00Z') });
+  let n = 0;
+  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.dates-${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  await send('menu.doctors'); await send('specialty.cardiology'); await send('branch.indiranagar');
+  const profile = await send('doctor.doctor-1');
+  assert.equal(profile.messages.at(-1).kind, 'buttons');
+  assert.match(profile.messages.at(-1).body, /₹1000/);
+  const times = await send('doctor.book');
+  const oldId = times.sections[0].rows[0].id;
+  assert.ok(times.sections[0].rows.length <= 10);
+  assert.ok(times.sections[0].rows.some(row => row.id === 'page.slot.1'));
+  const second = await send('page.slot.1');
+  assert.notEqual(second.sections[0].rows[0].id, oldId);
+  assert.match((await send(oldId)).text, /menu expired/);
+  await send('slots.date');
+  assert.match((await send(null, '2026-02-30')).text, /valid YYYY-MM-DD/);
+  await send('date.2026-10-02');
+  const selected = await send('page.slot.0');
+  await send(selected.sections[0].rows[0].id);
+  await send(null, 'hi');
+  assert.equal(backend.calls.at(-1)[0], 'release');
+});
+
+test('the receipt manage action expires and quoted fees are passed to the authoritative backend', async () => {
+  const backend = fakeBackend(); let time = new Date('2026-10-01T04:00:00Z');
+  const engine = createLiveEngine({ backend, clinicReady: true, requireReference: true, now: () => time });
+  let n = 0;
+  const send = (choiceId, text = '') => engine.handleResponse({ id: `wamid.receipt-${++n}`, from: '919811111111', type: 'text', choiceId, text });
+  await send('menu.book'); await send('specialty.cardiology'); await send('branch.indiranagar');
+  const doctorReply = await send('doctor.doctor-1');
+  await send(doctorReply.messages.at(-1).sections[0].rows[0].id);
+  const confirmation = await send(null, 'Test Patient');
+  assert.match(confirmation.body, /No payment is taken/);
+  const receipt = await send(confirmation.buttons[1].id);
+  assert.equal(backend.calls.find(row => row[0] === 'book')[1].expected_fee, 1000);
+  const manage = receipt.buttons[0].id;
+  await send(null, 'hi');
+  assert.match((await send(manage)).body, /AVO-/);
+  time = new Date('2026-10-01T04:31:00Z');
+  assert.match((await send(manage)).text, /shortcut expired/);
 });

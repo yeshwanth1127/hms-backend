@@ -125,7 +125,7 @@ def test_second_hold_cannot_take_same_slot():
 
 def test_admin_requires_key_and_manages_catalogue():
     with TestClient(app) as client:
-        assert client.get("/api/v1/admin/analytics").status_code == 422
+        assert client.get("/api/v1/admin/analytics").status_code == 401
         assert client.get("/api/v1/admin/analytics", headers={"X-Admin-Key": "wrong-key"}).status_code == 401
         headers = {"X-Admin-Key": "dev-admin-key"}
         analytics = client.get("/api/v1/admin/analytics", headers=headers)
@@ -155,10 +155,10 @@ def test_voice_service_books_and_is_visible_to_admin():
         doctors = client.get("/api/v1/integrations/voice/doctors", headers=service_headers,
                              params={"department": "cardiology"}).json()["doctors"]
         doctor = doctors[0]
-        assert [item["slug"] for item in doctor["branches"]] == ["indiranagar"]
-        assert [item["slug"] for item in doctor["in_person_branches"]] == ["indiranagar"]
-        assert doctor["virtual_branches"] == []
-        assert doctor["accepts_virtual"] is False
+        assert [item["slug"] for item in doctor["branches"]] == ["indiranagar", "koramangala"]
+        assert [item["slug"] for item in doctor["in_person_branches"]] == ["indiranagar", "koramangala"]
+        assert [item["slug"] for item in doctor["virtual_branches"]] == ["virtual"]
+        assert doctor["accepts_virtual"] is True
         branch = next(item for item in doctor["branches"] if item["slug"] == "indiranagar")
         day = future_weekday(2)
         slot = client.get("/api/v1/integrations/voice/availability", headers=service_headers, params={

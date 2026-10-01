@@ -22,7 +22,7 @@ export function createBackendClient({ baseUrl, serviceKey, fetchImpl = fetch }) 
     let response;
     try {
       response = await fetchImpl(url, {
-        method, headers, body: body ? JSON.stringify(body) : form,
+        method, headers, redirect: 'error', body: body ? JSON.stringify(body) : form,
         signal: AbortSignal.timeout(15000),
       });
     } catch (error) {
@@ -41,6 +41,19 @@ export function createBackendClient({ baseUrl, serviceKey, fetchImpl = fetch }) 
   }
 
   return {
+    preferences: (sender) => request('GET', `/preferences/${encodeURIComponent(sender)}`),
+    changePreferences: (sender, body) => request('PUT', `/preferences/${encodeURIComponent(sender)}`, { body }),
+    reception: (body) => request('POST', '/reception', { body }),
+    receptionMessage: (body) => request('POST', '/reception/messages', { body }),
+    resumeReception: (sender) => request('POST', `/reception/${encodeURIComponent(sender)}/resume`),
+    syncTemplates: (templates) => request('POST', '/templates/sync', { body: { templates } }),
+    claimOutreach: () => request('POST', '/outreach/claim'),
+    authorizeOutreach: (id, claimToken) => request('POST', `/outreach/${encodeURIComponent(id)}/sending`, { body: { claim_token: claimToken } }),
+    completeOutreach: (id, claimToken, metaId) => request('POST', `/outreach/${encodeURIComponent(id)}/sent`, { body: { claim_token: claimToken, meta_message_id: metaId } }),
+    failOutreach: (id, claimToken, error) => request('POST', `/outreach/${encodeURIComponent(id)}/failed`, { body: { claim_token: claimToken, error: String(error).slice(0, 240) } }),
+    deliveryStatus: (body) => request('POST', '/delivery-status', { body }),
+    engageOutreach: (id, sender, action = 'open') => request('POST', `/outreach/${encodeURIComponent(id)}/engage`, { body: { sender_id: sender, action } }),
+    authorizeReminder: (id) => request('POST', `/reminders/${encodeURIComponent(id)}/authorize`),
     loadConversation: (senderId) => request('GET', `/conversations/${encodeURIComponent(senderId)}`),
     saveConversation: (senderId, body) => request('PUT', `/conversations/${encodeURIComponent(senderId)}`, { body }),
     catalogue: () => request('GET', '/catalogue'),

@@ -13,6 +13,9 @@ class BranchOut(APIModel):
     slug: str
     name: str
     area: str
+    address: str = ""
+    directions_url: str = ""
+    arrival_instructions: str = ""
     timezone: str
     is_virtual: bool
 
@@ -99,6 +102,7 @@ class AppointmentCreate(BaseModel):
     patient_phone: str = Field(min_length=7, max_length=32)
     patient_email: EmailStr | None = None
     reason: str | None = Field(default=None, max_length=800)
+    acquisition_source: Literal["unknown", "direct", "google_business", "organic_search", "paid", "referral"] = "unknown"
     origin_channel: Literal["web", "voice", "staff", "whatsapp"] = "web"
     consent_to_reminders: bool = False
     idempotency_key: str = Field(min_length=8, max_length=120)
@@ -117,6 +121,7 @@ class AppointmentCreate(BaseModel):
 
 
 class AppointmentOut(APIModel):
+    consultation_fee: int | None = None
     id: str
     confirmation_code: str
     patient_name: str
@@ -137,6 +142,9 @@ class VoiceAppointmentsResponse(APIModel):
 
 
 class WhatsAppAppointmentOut(AppointmentOut):
+    address: str = ""
+    directions_url: str = ""
+    arrival_instructions: str = ""
     doctor_name: str
     branch_name: str
     timezone: str
@@ -233,6 +241,8 @@ class WhatsAppHoldCreate(BaseModel):
 
 
 class WhatsAppAppointmentCreate(BaseModel):
+    expected_fee: int | None = Field(default=None, ge=0)
+    outreach_id: str | None = Field(default=None, max_length=36)
     sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
     hold_id: str
     patient_name: str = Field(min_length=2, max_length=160)

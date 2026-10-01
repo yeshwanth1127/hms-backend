@@ -6,9 +6,11 @@ const MAX_CACHE = 2000;
 
 function asReply(value) { return typeof value === 'string' ? { kind: 'text', text: value } : value; }
 function list(body, buttonText, rows, title = 'Choose one') {
+  body = body.slice(0, 1024);
   return { kind: 'list', text: body, body, buttonText, sections: [{ title, rows }] };
 }
 function buttons(body, options, imagePath) {
+  body = body.slice(0, 1024);
   return { kind: 'buttons', text: body, body, buttons: options, ...(imagePath ? { imagePath } : {}) };
 }
 function dateInZone(value, zone) {
@@ -74,6 +76,7 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
   }
 
   async function welcome(sender, session) {
+    await abandon(sender, session);
     reset(session);
     const visits = requireReference ? [] : await backend.appointments(sender, 1);
     return buttons(`${pilotPrefix}Welcome to Avocado Health. What can we help you with today?\nFor urgent medical needs, call your clinic or local emergency service.`, [
@@ -84,51 +87,96 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
     ], welcomeImagePath);
   }
 
-  async function specialties(session, mode = 'booking') {
+  function pageRows(values, prefix, page, render, extra = []) {
+    const size = 7, current = Math.max(0, Math.min(page, Math.max(0, Math.ceil(values.length / size) - 1)));
+    const rows = values.slice(current * size, (current + 1) * size).map(render);
+    if (current > 0) rows.push({ id: `page.${prefix}.${current - 1}`, title: 'Previous page' });
+    if ((current + 1) * size < values.length) rows.push({ id: `page.${prefix}.${current + 1}`, title: 'More options' });
+    rows.push(...extra);
+    return { rows, current };
+  }
+  async function abandon(sender, session) {
+    if (session.draft.hold) await backend.releaseHold(session.draft.hold.id, sender);
+    delete session.draft.hold;
+  }
+  async function preferences(sender, session) {
+    const prefs = await backend.preferences(sender);
+    session.step = 'preferences';
+    return list(`Message preferences\nVisit reminders and follow-ups: ${prefs.service_messages && !prefs.stopped_all ? 'on' : 'off'}\nClinic offers: ${prefs.marketing && !prefs.stopped_all ? 'on' : 'off'}\nVisit messages require reminder consent on that booking. Offers are optional. Send STOP to stop all proactive messages, or STOP OFFERS for offers only.`, 'Preferences', [
+      { id: `prefs.service.${prefs.service_messages && !prefs.stopped_all ? 'off' : 'on'}`, title: prefs.service_messages && !prefs.stopped_all ? 'Turn visit messages off' : 'Allow visit messages', description: 'Reminders and clinic follow-ups; no medical advice' },
+      { id: `prefs.marketing.${prefs.marketing && !prefs.stopped_all ? 'off' : 'on'}`, title: prefs.marketing && !prefs.stopped_all ? 'Turn offers off' : 'Allow clinic offers', description: 'Optional clinic news and offers; withdraw anytime' },
+      { id: 'prefs.branch', title: 'Preferred clinic' }, { id: 'prefs.interest', title: 'Offer interests' },
+      { id: 'prefs.language', title: 'Outreach language', description: 'Booking chat currently uses English' },
+      { id: 'receipt.menu', title: 'Main menu' },
+    ], 'Your choices');
+  }
+  async function preferenceChoices(session, field, page = 0) {
     const catalogue = await backend.catalogue();
+    session.step = `preference${field}`;
+    const choices = field === 'branch' ? catalogue.branches.filter(b => !b.is_virtual) : catalogue.departments;
+    const result = pageRows(choices, `preference${field}`, page, item => ({ id: `prefs.set${field}.${field === 'branch' ? item.id : item.slug}`, title: item.name.slice(0, 24) }), [{ id: `prefs.set${field}.all`, title: field === 'branch' ? 'All clinics' : 'All specialties' }]);
+    return list(field === 'branch' ? 'Which clinic should your offers cover?' : 'Choose an offer interest, or all specialties. Consent stays unchanged.', 'Choose preference', result.rows, 'Offer preferences');
+  }
+  async function reception(sender, session, message) {
+    await abandon(sender, session);
+    const item = await backend.reception({ sender_id: sender, source_message_id: message.id,
+      text: `Reception request${session.draft.doctor ? ` for ${session.draft.doctor.name}` : ''}` });
+    reset(session);
+    const info = (await backend.preferences(sender)).reception;
+    return buttons(`Your reception request is recorded. Case ${item.case_id.slice(0, 8)}.\n${info.hours}\n${info.response}${info.phone ? `\nCall: ${info.phone}` : ''}\nThe bot is paused while reception helps you. Send your question now. Choose Resume bot when you want to book again. This chat is not for emergencies.`, [
+      { id: 'reception.resume', title: 'Resume bot' }, { id: 'menu.preferences', title: 'Message preferences' },
+    ]);
+  }
+  async function specialties(session, mode = 'booking', page = 0) {
+    const catalogue = session.draft.catalogue ?? await backend.catalogue();
     session.step = 'specialty';
     session.draft = { mode, catalogue };
-    const values = catalogue.departments.slice(0, 10);
-    return list('Which specialty would you like?', 'Choose specialty', values.map((item) => ({
+    const result = pageRows(catalogue.departments, 'specialty', page, item => ({
       id: `specialty.${item.slug}`, title: item.name.slice(0, 24), description: item.tagline?.slice(0, 72),
-    })), 'Specialties');
+    }), [{ id: 'nav.back', title: 'Back to start' }]);
+    session.draft.specialtyPage = result.current;
+    return list('Which specialty would you like?', 'Choose specialty', result.rows, 'Specialties');
   }
-
-  function branches(session) {
-    const values = session.draft.catalogue.branches.filter((item) => !item.is_virtual).slice(0, 10);
+  function branches(session, page = 0) {
+    const values = session.draft.catalogue.branches.filter(item => !item.is_virtual);
     session.step = 'branch';
-    return list('Choose a clinic location.', 'Choose clinic', values.map((item) => ({
-      id: `branch.${item.slug}`, title: item.name.slice(0, 24), description: item.area.slice(0, 72),
-    })), 'Clinics');
+    const result = pageRows(values, 'branch', page, item => ({ id: `branch.${item.slug}`, title: item.name.slice(0, 24), description: item.area.slice(0, 72) }), [{ id: 'nav.back', title: 'Back to specialties' }]);
+    session.draft.branchPage = result.current;
+    return list('Choose a clinic location.', 'Choose clinic', result.rows, 'Clinics');
   }
-
-  async function doctorMenu(session) {
+  async function doctorMenu(session, page = 0) {
     const { department, branch } = session.draft;
     const doctors = await backend.doctors(department.slug, branch.slug);
-    session.draft.doctors = doctors.slice(0, 10);
+    session.draft.doctors = doctors;
     session.step = 'doctor';
-    if (!doctors.length) return `No doctors are listed for ${department.name} at ${branch.name}. Send “hi” to start again.`;
-    return list(`Choose a doctor in ${department.name} at ${branch.name}.`, 'View doctors',
-      session.draft.doctors.map((item) => ({ id: `doctor.${item.id}`, title: item.name.slice(0, 24), description: item.title.slice(0, 72) })),
-      'Doctors');
+    if (!doctors.length) return buttons(`No doctors are listed for ${department.name} at ${branch.name}. Reception can help you find another option.`, [{ id: 'nav.back', title: 'Other clinic' }, { id: 'menu.reception', title: 'Ask reception' }]);
+    const result = pageRows(doctors, 'doctor', page, item => ({ id: `doctor.${item.id}`, title: item.name.slice(0, 24), description: `${item.title} · ₹${item.consultation_fee}`.slice(0, 72) }), [{ id: 'nav.back', title: 'Other clinic' }]);
+    session.draft.doctorPage = result.current;
+    return list(`Choose a doctor in ${department.name} at ${branch.name}.`, 'View doctors', result.rows, 'Doctors');
   }
-
-  async function slotMenu(session, doctor, action = 'booking', currentStart) {
+  async function slotMenu(session, doctor, action = 'booking', currentStart, day, page = 0) {
     const zone = session.draft.branch.timezone;
     const today = dateInZone(now(), zone);
-    const result = await backend.availability(doctor.id, session.draft.branch.id, today, daysFrom(today, 7));
-    const slots = result.slots.filter((slot) => slot.starts_at !== currentStart).slice(0, 10);
-    session.draft.slots = slots;
-    session.draft.doctor = doctor;
+    const result = await backend.availability(doctor.id, session.draft.branch.id, day ?? today, day ?? daysFrom(today, 30));
+    const available = result.slots.filter(slot => slot.starts_at !== currentStart);
+    const chosenDay = day ?? (available[0] ? dateInZone(new Date(available[0].starts_at), zone) : today);
+    const slots = available.filter(slot => dateInZone(new Date(slot.starts_at), zone) === chosenDay);
+    Object.assign(session.draft, { slots, doctor, chosenDay, slotAction: action, currentStart, slotToken: randomBytes(8).toString('hex') });
     session.step = action === 'reschedule' ? 'replacementSlot' : 'slot';
-    if (!slots.length) return `No available times were returned for ${doctor.name} at ${session.draft.branch.name}. Send “hi” to start again.`;
-    return list(`Choose an available time for ${doctor.name}. Times shown in ${zone}.`, 'Choose time',
-      slots.map((slot, index) => ({ id: `slot.${index + 1}`, title: when(slot.starts_at, zone).slice(0, 24), description: session.draft.branch.name.slice(0, 72) })),
-      'Available times');
+    if (!slots.length) return buttons(`No available times for ${doctor.name} on ${chosenDay}. A reception request does not reserve a visit.`, [
+      { id: 'slots.date', title: 'Choose another date' }, { id: 'nav.back', title: 'Other doctors' }, { id: 'menu.reception', title: 'Ask reception' },
+    ]);
+    const resultPage = pageRows(slots, 'slot', page, (slot) => ({ id: `slot.${slots.indexOf(slot) + 1}.${session.draft.slotToken}`, title: when(slot.starts_at, zone).slice(0, 24), description: session.draft.branch.name.slice(0, 72) }), [{ id: 'slots.date', title: 'Choose another date' }]);
+    session.draft.slotPage = resultPage.current;
+    return list(`Choose a time for ${doctor.name} on ${chosenDay}. Times in ${zone}. Send “back” for other doctors.`, 'Choose time', resultPage.rows, 'Available times');
   }
-
+  function dateMenu(session) {
+    session.step = 'chooseDate';
+    const today = dateInZone(now(), session.draft.branch.timezone);
+    return list('Choose a date, or type YYYY-MM-DD for a date within the next 30 days.', 'Choose date', Array.from({ length: 7 }, (_, n) => ({ id: `date.${daysFrom(today, n)}`, title: daysFrom(today, n) })).concat([{ id: 'nav.back', title: 'Back to times' }]), 'Visit dates');
+  }
   function appointmentSummary(item) {
-    return `${clinicReady ? '' : 'LOCAL TEST RECORD\n'}${item.doctor_name}\n${when(item.reservation.starts_at, item.timezone)} · ${item.branch_name}\nReference: ${item.confirmation_code}\nStatus: ${item.status}`;
+    return `${clinicReady ? '' : 'LOCAL TEST RECORD\n'}${item.doctor_name}\n${when(item.reservation.starts_at, item.timezone)} · ${item.branch_name}\nReference: ${item.confirmation_code}\nStatus: ${item.status}\n${item.address ? `${item.address.slice(0, 180)}\n` : ''}${item.consultation_fee != null ? `Consultation: ₹${item.consultation_fee} · Pay at clinic\n` : ''}${item.directions_url ? `Directions: ${item.directions_url}\n` : ''}${item.arrival_instructions ? `${item.arrival_instructions.slice(0, 180)}\n` : ''}`;
   }
 
   async function visits(sender, session, page = 0) {
@@ -179,7 +227,95 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
     const value = raw.toLowerCase().replace(/\s+/g, ' ');
     const id = message.choiceId;
 
+    const prefs = backend.preferences ? await backend.preferences(sender) : null;
+    if (message.type === 'text' && (/^(stop|unsubscribe|stop all)$/.test(value) || /^(stop offers|stop marketing)$/.test(value) || id?.startsWith('outreach.stop.'))) {
+      if (!backend.changePreferences) return 'Message preferences are unavailable. Please contact the clinic.';
+      if (id?.startsWith('outreach.stop.')) {
+        try { await backend.engageOutreach(id.slice('outreach.stop.'.length), sender, 'stop'); }
+        catch (error) { if (!(error instanceof BackendError && error.status === 404)) throw error; }
+      }
+      const all = /^(stop|unsubscribe|stop all)$/.test(value);
+      await backend.changePreferences(sender, { source_message_id: message.id, ...(all ? { stopped_all: true } : { marketing: false }) });
+      return buttons(all ? 'All proactive WhatsApp messages are turned off. You can still message us to book or ask for help.' : 'Clinic offers are turned off. Your visit-message preference is unchanged.', [{ id: 'menu.preferences', title: 'Message preferences' }, { id: 'receipt.menu', title: 'Main menu' }]);
+    }
+    if (message.type === 'text' && /\b(emergency|urgent|chest pain|suicid)/i.test(value)) return 'This chat is not monitored for emergencies. Contact local emergency services or call the clinic now.';
+    if (id === 'menu.preferences' || value === 'preferences') { await abandon(sender, session); return preferences(sender, session); }
+    if (id?.startsWith('prefs.') && prefs) {
+      const [, field, setting] = id.split('.');
+      if (['service', 'marketing'].includes(field) && ['on', 'off'].includes(setting)) {
+        await backend.changePreferences(sender, { source_message_id: message.id, [field === 'service' ? 'service_messages' : field]: setting === 'on', ...(setting === 'on' ? { stopped_all: false } : {}) });
+        return preferences(sender, session);
+      }
+      if (field === 'branch') return preferenceChoices(session, 'branch');
+      if (field === 'interest') return preferenceChoices(session, 'interest');
+      if (field === 'language') return list('Choose a language for approved outreach messages. Booking chat currently uses English.', 'Choose language', ['en', 'hi', 'kn'].map(l => ({ id: `prefs.setlanguage.${l}`, title: ({ en: 'English', hi: 'Hindi', kn: 'Kannada' })[l] })), 'Outreach language');
+      if (['setbranch', 'setinterest', 'setlanguage'].includes(field)) {
+        const choices = field === 'setbranch' ? { branch_id: setting === 'all' ? '' : setting } : field === 'setinterest' ? { interests: setting === 'all' ? [] : [setting] } : { language: setting };
+        await backend.changePreferences(sender, { source_message_id: message.id, ...choices });
+        return preferences(sender, session);
+      }
+    }
+    const preferencePage = /^page\.preference(branch|interest)\.(\d+)$/.exec(id ?? '');
+    if (preferencePage && session.step === `preference${preferencePage[1]}`) return preferenceChoices(session, preferencePage[1], Number(preferencePage[2]));
+    if (id === 'reception.resume' || value === 'resume bot') { await backend.resumeReception(sender); return welcome(sender, session); }
+    if (id === 'menu.reception' || value === 'reception' || value === 'human') return reception(sender, session, message);
+    if (prefs?.handoff && message.type === 'text') {
+      await backend.receptionMessage({ sender_id: sender, source_message_id: message.id, text: raw });
+      return { kind: 'silent', text: '' };
+    }
+    if (id?.startsWith('outreach.')) {
+      const [, action, jobId] = id.split('.');
+      try { await backend.engageOutreach(jobId, sender); }
+      catch (error) { if (error instanceof BackendError && error.status === 404) return 'That action expired. Send “hi” for the menu.'; throw error; }
+      if (action === 'feedback') {
+        session.step = 'rating'; session.draft = {};
+        return list('How was your clinic visit? Choose a private rating.', 'Choose rating', [1, 2, 3, 4, 5].map(n => ({ id: `rating.${n}`, title: `${n} / 5` })), 'Visit feedback');
+      }
+      if (action === 'contact') return reception(sender, session, message);
+      if (action === 'book') { session.outreach = { id: jobId, at: now().toISOString() }; return specialties(session, 'booking'); }
+      return welcome(sender, session);
+    }
+    if (id?.startsWith('receipt.manage.')) {
+      if (!session.receipt || id !== `receipt.manage.${session.receipt.token}` || now().getTime() - new Date(session.receipt.at).getTime() >= 30 * 60 * 1000) return 'For privacy, this shortcut expired. Choose Open a visit and enter your booking reference.';
+      session.draft = { verifiedAt: now().toISOString() };
+      return detail(sender, session, session.receipt.id);
+    }
+    if (requireReference && ['visits', 'detail', 'confirmCancel', 'replacementSlot', 'confirmReschedule'].includes(session.step)
+        && !referenceRecent(session)) {
+      reset(session);
+      return 'For privacy, this visit session expired. Choose Open a visit and enter its booking reference again.';
+    }
+    if (id === 'nav.back' || value === 'back') {
+      await abandon(sender, session);
+      if (session.step === 'branch') return specialties(session, session.draft.mode);
+      if (session.step === 'doctor') return branches(session);
+      if (['slot', 'name', 'confirmBooking', 'doctorDetail'].includes(session.step)) return doctorMenu(session);
+      if (session.step === 'chooseDate') return slotMenu(session, session.draft.doctor, session.draft.slotAction, session.draft.currentStart, session.draft.chosenDay);
+      if (['replacementSlot', 'confirmReschedule'].includes(session.step)) return detail(sender, session, session.draft.appointment.id);
+      return welcome(sender, session);
+    }
+    const paging = /^page\.(specialty|branch|doctor|slot)\.(\d+)$/.exec(id ?? '');
+    if (paging) {
+      const page = Number(paging[2]);
+      if (paging[1] === 'specialty' && session.step === 'specialty') return specialties(session, session.draft.mode, page);
+      if (paging[1] === 'branch' && session.step === 'branch') return branches(session, page);
+      if (paging[1] === 'doctor' && session.step === 'doctor') return doctorMenu(session, page);
+      if (paging[1] === 'slot' && ['slot', 'replacementSlot'].includes(session.step)) return slotMenu(session, session.draft.doctor, session.draft.slotAction, session.draft.currentStart, session.draft.chosenDay, page);
+      return 'This menu expired. Send “hi” to start again.';
+    }
+    if (id === 'slots.date' && ['slot', 'replacementSlot'].includes(session.step)) return dateMenu(session);
+    if (session.step === 'chooseDate') {
+      const day = id?.startsWith('date.') ? id.slice(5) : raw;
+      const today = dateInZone(now(), session.draft.branch.timezone);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || Number.isNaN(Date.parse(`${day}T00:00:00Z`)) || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day || day < today || day > daysFrom(today, 30)) return 'Enter a valid YYYY-MM-DD within the next 30 days, or choose a date from the list.';
+      return slotMenu(session, session.draft.doctor, session.draft.slotAction, session.draft.currentStart, day);
+    }
+    if (session.step === 'doctorDetail') {
+      if (id === 'doctor.book') return slotMenu(session, session.draft.doctor);
+      return doctorMenu(session);
+    }
     if (['image', 'document', 'video', 'audio'].includes(message.type)) {
+      await abandon(sender, session);
       if (!message.mediaId || !downloadMedia) return 'I could not receive this attachment. Please try again or contact the clinic.';
       let media;
       try {
@@ -190,7 +326,8 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
         }
         throw error;
       }
-      const intake = await backend.case({ sender_id: sender, kind: 'issue',
+      if (prefs?.handoff) await backend.receptionMessage({ sender_id: sender, source_message_id: message.id, text: message.caption || "Attachment sent for reception" });
+      const intake = prefs?.handoff ? { id: prefs.handoff.case_id } : await backend.case({ sender_id: sender, kind: 'issue',
         description: message.caption?.trim() || `${message.type} attachment sent via WhatsApp`,
         idempotency_key: idem('media', message) });
       try {
@@ -202,20 +339,17 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
         }
         throw error;
       }
+      if (prefs?.handoff) return { kind: 'silent', text: '' };
       reset(session);
       return `Your attachment was received for staff review. Case ${intake.id.slice(0, 8)}. Please do not use WhatsApp for emergencies.`;
     }
     if (message.type !== 'text') return 'That message type is not supported. Send “hi” for the menu.';
     if (['hi', 'hello', 'start', 'menu', 'help', '0'].includes(value) || id === 'booking.menu' || id === 'receipt.menu') return welcome(sender, session);
-    if (requireReference && ['visits', 'detail', 'confirmCancel', 'replacementSlot', 'confirmReschedule'].includes(session.step)
-        && !referenceRecent(session)) {
-      reset(session);
-      return 'For privacy, this visit session expired. Choose Open a visit and enter its booking reference again.';
-    }
     if (/\b(emergency|urgent|chest pain|suicid)/i.test(value)) return 'This chat is not monitored for emergencies. Contact local emergency services or call the clinic now.';
-    if (['book', 'book appointment'].includes(value) || id === 'menu.book') return specialties(session, 'booking');
-    if (['doctors', 'doctor'].includes(value) || id === 'menu.doctors') return specialties(session, 'details');
+    if (['book', 'book appointment'].includes(value) || id === 'menu.book') { await abandon(sender, session); return specialties(session, 'booking'); }
+    if (['doctors', 'doctor'].includes(value) || id === 'menu.doctors') { await abandon(sender, session); return specialties(session, 'details'); }
     if (['my appointments', 'my visits', 'appointments'].includes(value) || id === 'menu.status' || id === 'receipt.visits') {
+      await abandon(sender, session);
       if (requireReference) {
         session.step = 'visitReference';
         session.draft = {};
@@ -227,9 +361,11 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
       { id: 'menu.status', title: requireReference ? 'Open a visit' : 'My visits' },
       { id: 'menu.doctors', title: 'Find a doctor' },
       { id: 'menu.issue', title: 'Raise an issue' }, { id: 'menu.feedback', title: 'Leave feedback' },
+      { id: 'menu.reception', title: 'Talk to reception' }, { id: 'menu.preferences', title: 'Message preferences' },
     ], 'Services');
-    if (id === 'menu.issue' || value === 'issue') { session.step = 'issue'; session.draft = {}; return 'Briefly describe the issue. A staff case will be created. For emergencies, call the clinic.'; }
+    if (id === 'menu.issue' || value === 'issue') { await abandon(sender, session); session.step = 'issue'; session.draft = {}; return 'Briefly describe the issue. A staff case will be created. For emergencies, call the clinic.'; }
     if (id === 'menu.feedback' || value === 'rate' || value === 'feedback') {
+      await abandon(sender, session);
       session.step = 'rating'; session.draft = {};
       return list('Choose a private rating from 1 to 5.', 'Choose rating', [1, 2, 3, 4, 5].map((n) => ({ id: `rating.${n}`, title: `${n} / 5` })), 'Rating');
     }
@@ -246,8 +382,8 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
       }
     }
     if (session.step === 'specialty') {
-      const values = session.draft.catalogue.departments.slice(0, 10);
-      const selected = choice(message, 'specialty', values.map((item) => item.slug));
+      const values = session.draft.catalogue.departments;
+      const selected = choice(message, 'specialty', values.slice((session.draft.specialtyPage ?? 0) * 7, ((session.draft.specialtyPage ?? 0) + 1) * 7).map((item) => item.slug));
       const department = values.find((item) => item.slug === selected);
       if (!department) return specialties(session, session.draft.mode);
       session.draft.department = department;
@@ -262,8 +398,8 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
       ] };
     }
     if (session.step === 'branch') {
-      const values = session.draft.catalogue.branches.filter((item) => !item.is_virtual).slice(0, 10);
-      const selected = choice(message, 'branch', values.map((item) => item.slug));
+      const values = session.draft.catalogue.branches.filter((item) => !item.is_virtual);
+      const selected = choice(message, 'branch', values.slice((session.draft.branchPage ?? 0) * 7, ((session.draft.branchPage ?? 0) + 1) * 7).map((item) => item.slug));
       const branch = values.find((item) => item.slug === selected);
       if (!branch) return branches(session);
       session.draft.branch = branch;
@@ -271,10 +407,12 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
     }
     if (session.step === 'doctor') {
       const doctors = session.draft.doctors;
-      const selected = choice(message, 'doctor', doctors.map((item) => item.id));
+      const selected = choice(message, 'doctor', doctors.slice((session.draft.doctorPage ?? 0) * 7, ((session.draft.doctorPage ?? 0) + 1) * 7).map((item) => item.id));
       const doctor = doctors.find((item) => item.id === selected);
       if (!doctor) return doctorMenu(session);
-      const slotReply = await slotMenu(session, doctor);
+      session.draft.doctor = doctor;
+      const slotReply = session.draft.mode === 'details' ? buttons(`${doctor.name}\n${doctor.title}\nConsultation: ₹${doctor.consultation_fee} · Pay at clinic\n${doctor.bio}`.slice(0, 1000), [{ id: 'doctor.book', title: 'Book this doctor' }, { id: 'nav.back', title: 'Other doctors' }]) : await slotMenu(session, doctor);
+      if (session.draft.mode === 'details') session.step = 'doctorDetail';
       if (!doctor.photo_asset_id) return { kind: 'sequence', text: slotReply.text ?? slotReply,
         messages: [asReply(`${doctor.name}\n${doctor.title}\n${doctor.bio}`), asReply(slotReply)] };
       const asset = await backend.asset(doctor.photo_asset_id);
@@ -285,7 +423,8 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
       ] };
     }
     if (session.step === 'slot' || session.step === 'replacementSlot') {
-      const selected = choice(message, 'slot', session.draft.slots.map((_, index) => String(index + 1)));
+      if (message.choiceId?.startsWith('slot.') && clinicReady && !message.choiceId.endsWith(`.${session.draft.slotToken}`)) return 'That time menu expired. Choose a time from the latest menu, or send “hi” to restart.';
+      const selected = choice(message, 'slot', session.draft.slots.slice((session.draft.slotPage ?? 0) * 7, ((session.draft.slotPage ?? 0) + 1) * 7).map((_, index) => String((session.draft.slotPage ?? 0) * 7 + index + 1)))?.split('.')[0];
       const slot = session.draft.slots[Number(selected) - 1];
       if (!slot) return slotMenu(session, session.draft.doctor, session.step === 'replacementSlot' ? 'reschedule' : 'booking');
       try {
@@ -312,7 +451,7 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
       session.draft.patientName = raw;
       session.step = 'confirmBooking';
       beginConfirmation(session);
-      return buttons(`Confirm ${session.draft.doctor.name} at ${when(session.draft.slot.starts_at, session.draft.branch.timezone)} for ${raw}? Choose whether you want an appointment reminder.`, [
+      return buttons(`Patient: ${raw}\nDoctor: ${session.draft.doctor.name}\n${when(session.draft.slot.starts_at, session.draft.branch.timezone)}\n${session.draft.branch.name}${session.draft.branch.address ? `\n${session.draft.branch.address}` : ''}\nConsultation: ₹${session.draft.doctor.consultation_fee} · Pay at clinic. No payment is taken in this chat.\nChoose whether to allow visit reminders and clinic follow-ups. Offers require separate consent.`, [
         { id: confirmId(session, 'reminders'), title: 'Book + reminder' },
         { id: confirmId(session, 'only'), title: 'Book only' },
         { id: confirmId(session, 'no'), title: 'Do not book' },
@@ -330,16 +469,21 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
       try {
         const item = await backend.book({ sender_id: sender, hold_id: session.draft.hold.id,
           patient_name: session.draft.patientName, consent_to_reminders: reminders,
+          expected_fee: session.draft.doctor.consultation_fee,
+          ...(session.outreach && now().getTime() - new Date(session.outreach.at).getTime() < 30 * 60 * 1000 ? { outreach_id: session.outreach.id } : {}),
           idempotency_key: idem('book', message) });
         reset(session);
+        session.receipt = { id: item.id, token: randomBytes(12).toString('hex'), at: now().toISOString() };
+        delete session.outreach;
         return buttons(`${pilotPrefix}Appointment ${clinicReady ? 'confirmed' : 'recorded for testing'}.\n${appointmentSummary(item)}\nSend “hi” to return to the start.`, [
+          { id: `receipt.manage.${session.receipt.token}`, title: 'Manage this visit' },
           { id: 'receipt.visits', title: requireReference ? 'Open a visit' : 'My visits' },
           { id: 'receipt.menu', title: 'Main menu' },
         ]);
       } catch (error) {
         if (error instanceof BackendError && error.status === 409) {
           reset(session);
-          return 'That hold expired or the booking conflicted. No confirmation was issued. Send “hi” to choose another time.';
+          return 'The price or available time changed. No confirmation was issued. Send “hi” to review the current fee and choose a new time.';
         }
         throw error;
       }

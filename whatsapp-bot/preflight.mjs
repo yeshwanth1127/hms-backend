@@ -42,6 +42,13 @@ export async function runPreflight(env, fetchImpl = fetch) {
       throw new Error(`Specialty ${department.slug} has no doctor at an active clinic branch`);
     }
   }
+  if (env.WA_OUTREACH_ENABLED === 'true') {
+    const inventory = await getJson(
+      `https://graph.facebook.com/${env.WA_GRAPH_VERSION}/${env.WA_BUSINESS_ACCOUNT_ID}/message_templates?limit=100&fields=id,status`,
+      { authorization: `Bearer ${env.WA_ACCESS_TOKEN}` }, fetchImpl,
+    );
+    if (!Array.isArray(inventory.data)) throw new Error('Meta template-management permission could not be verified');
+  }
   const number = await getJson(
     `https://graph.facebook.com/${env.WA_GRAPH_VERSION}/${env.WA_PHONE_NUMBER_ID}?fields=display_phone_number`,
     { authorization: `Bearer ${env.WA_ACCESS_TOKEN}` }, fetchImpl,
