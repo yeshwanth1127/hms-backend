@@ -46,6 +46,18 @@ class VoiceDoctorOut(DoctorOut):
     virtual_branches: list[BranchOut]
 
 
+class VoiceDoctorsResponse(APIModel):
+    """Envelope so voice-agent Jinja templates can iterate `doctors` by name."""
+    doctors: list[VoiceDoctorOut]
+    count: int
+
+
+class VoiceBranchesResponse(APIModel):
+    """Envelope so voice-agent Jinja templates can iterate `branches` by name."""
+    branches: list[BranchOut]
+    count: int
+
+
 class AvailabilitySlot(APIModel):
     doctor_id: str
     branch_id: str
@@ -91,6 +103,18 @@ class AppointmentCreate(BaseModel):
     consent_to_reminders: bool = False
     idempotency_key: str = Field(min_length=8, max_length=120)
 
+    @model_validator(mode="before")
+    @classmethod
+    def blank_optional_fields(cls, data):
+        if isinstance(data, dict):
+            if isinstance(data.get("patient_email"), str) and not data["patient_email"].strip():
+                data["patient_email"] = None
+            if data.get("reason") == "":
+                data["reason"] = None
+            if data.get("origin_channel") in (None, ""):
+                data["origin_channel"] = "web"
+        return data
+
 
 class AppointmentOut(APIModel):
     id: str
@@ -104,6 +128,12 @@ class AppointmentOut(APIModel):
     consent_to_reminders: bool = False
     created_at: datetime
     reservation: HoldOut
+
+
+class VoiceAppointmentsResponse(APIModel):
+    """Envelope so voice-agent Jinja templates can iterate `appointments` by name."""
+    appointments: list[AppointmentOut]
+    count: int
 
 
 class WhatsAppAppointmentOut(AppointmentOut):

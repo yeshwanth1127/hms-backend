@@ -18,6 +18,15 @@ class Settings(BaseSettings):
     media_dir: str = "./uploads"
     media_scan_socket: str | None = None
 
+    # Sarvam Voice Agents — used only by the public web wrapper to mint
+    # short-lived signed WebSocket URLs. Never expose to the browser.
+    sarvam_api_key: str = ""
+    sarvam_org_id: str = ""
+    sarvam_workspace_id: str = ""
+    sarvam_app_id: str = ""
+    sarvam_app_version: int | None = None
+    sarvam_agent_display_name: str = "Aanya"
+
     @property
     def origins(self) -> list[str]:
         return [item.strip() for item in self.allowed_origins.split(",") if item.strip()]

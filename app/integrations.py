@@ -9,8 +9,9 @@ from .config import settings
 from .db import get_db
 from .models import Appointment, Branch, Doctor, Reservation, ScheduleRule, VoiceSession, VoiceToolCall, utcnow
 from .schemas import (
-    AppointmentCreate, AppointmentOut, AvailabilityResponse, DoctorOut, HoldCreate, HoldOut,
-    VoiceDoctorOut, VoiceSessionCreate, VoiceSessionEnd, VoiceSessionEvent,
+    AppointmentCreate, AppointmentOut, AvailabilityResponse, BranchOut, DoctorOut, HoldCreate, HoldOut,
+    VoiceAppointmentsResponse, VoiceBranchesResponse, VoiceDoctorOut, VoiceDoctorsResponse,
+    VoiceSessionCreate, VoiceSessionEnd, VoiceSessionEvent,
 )
 from .services import DomainError, availability, confirm_appointment, create_hold
 
@@ -23,15 +24,63 @@ def require_voice_service(x_service_key: str = Header(alias="X-Service-Key")) ->
     return "voice-runtime"
 
 
-@router.get("/doctors", response_model=list[VoiceDoctorOut])
+# Colloquial / symptom phrases callers use on the voice line → department slugs.
+_DEPARTMENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "cardiology": (
+        "heart", "dil", "cardiac", "cardio", "chest pain", "bp", "blood pressure",
+        "hypertension", "heart doctor", "dil ke doctor", "dil ka doctor",
+    ),
+    "dermatology": ("skin", "rash", "acne", "derma"),
+    "orthopedics": (
+        "bone", "joint", "ortho", "fracture", "knee", "back pain", "backache",
+        "back ache", "spine", "slip disc", "slipped disc", "peeth", "kamar",
+    ),
+    "neurology": ("neuro", "migraine", "headache", "seizure", "brain"),
+    "pediatrics": ("child", "kids", "paediatric", "pediatric", "baby"),
+    "ent": ("ear", "nose", "throat", "sinus"),
+    "dental": ("tooth", "teeth", "dentist", "gum"),
+    "general-medicine": ("general", "fever", "cold", "flu", "physician", "gp"),
+    "metabolic": ("diabetes", "thyroid", "sugar", "endocrine"),
+}
+
+
+def _department_match(needle: str, name: str, slug: str) -> bool:
+    needle = " ".join(needle.casefold().split())
+    name_cf = name.casefold()
+    slug_cf = slug.casefold()
+    if not needle:
+        return False
+    if needle in name_cf or needle == slug_cf or slug_cf in needle or name_cf in needle:
+        return True
+    aliases = _DEPARTMENT_ALIASES.get(slug_cf, ())
+    return any(alias in needle or needle in alias for alias in aliases)
+
+
+@router.get("/branches", response_model=VoiceBranchesResponse)
+def list_branches(_: str = Depends(require_voice_service), db: Session = Depends(get_db)):
+    """Clinic branches the voice agent can offer when a caller asks where we operate."""
+    items = db.scalars(
+        select(Branch).where(Branch.is_active.is_(True)).order_by(Branch.name)
+    ).all()
+    branches = [BranchOut.model_validate(item) for item in items]
+    return VoiceBranchesResponse(branches=branches, count=len(branches))
+
+
+@router.get("/doctors", response_model=VoiceDoctorsResponse)
 def doctors(department: str | None = None, branch: str | None = None,
             _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
     items = db.scalars(select(Doctor).where(Doctor.is_active.is_(True)).order_by(Doctor.name)).unique().all()
+    all_items = items
+    department = (department or "").strip() or None
+    branch = (branch or "").strip() or None
     if department:
-        needle = department.casefold()
-        items = [item for item in items if any(
-            needle in value.name.casefold() or needle == value.slug.casefold() for value in item.departments
+        needle = department
+        filtered = [item for item in items if any(
+            _department_match(needle, value.name, value.slug) for value in item.departments
         )]
+        # Soft fallback: unknown colloquial phrases return the full list so the
+        # agent can still offer options instead of failing the call.
+        items = filtered or all_items
     active_rules = db.scalars(select(ScheduleRule).where(
         ScheduleRule.is_active.is_(True),
         or_(ScheduleRule.effective_until.is_(None), ScheduleRule.effective_until >= date.today()),
@@ -67,17 +116,22 @@ def doctors(department: str | None = None, branch: str | None = None,
 
     if branch:
         needle = branch.casefold()
-        result = [item for item in result if any(
+        filtered = [item for item in result if any(
             needle in value.name.casefold() or needle in value.area.casefold() or needle == value.slug.casefold()
             for value in item.branches
         )]
-    return result
+        result = filtered or result
+    return VoiceDoctorsResponse(doctors=result, count=len(result))
 
 
 @router.get("/availability", response_model=AvailabilityResponse)
 def get_availability(doctor_id: str, branch_id: str, start_date: date, end_date: date,
-                     consultation_type: str = Query("in_person", pattern="^(in_person|virtual)$"),
+                     consultation_type: str | None = None,
                      _: str = Depends(require_voice_service), db: Session = Depends(get_db)):
+    # Voice agents sometimes send an empty consultation_type; treat that as in-person
+    # instead of failing request validation.
+    if consultation_type not in ("in_person", "virtual"):
+        consultation_type = "in_person"
     slots, timezone_name = availability(db, doctor_id, branch_id, start_date, end_date, consultation_type)
     return AvailabilityResponse(slots=slots, timezone=timezone_name)
 
@@ -101,11 +155,11 @@ def hold_release(hold_id: str, owner_key: str, _: str = Depends(require_voice_se
 def appointment_create(body: AppointmentCreate, _: str = Depends(require_voice_service),
                        db: Session = Depends(get_db)):
     if body.origin_channel != "voice":
-        raise DomainError("INVALID_ORIGIN", "Voice service bookings must use the voice origin.", 422)
+        body = body.model_copy(update={"origin_channel": "voice"})
     return confirm_appointment(db, body)
 
 
-@router.get("/appointments", response_model=list[AppointmentOut])
+@router.get("/appointments", response_model=VoiceAppointmentsResponse)
 def appointment_lookup(patient_phone: str = Query(min_length=7, max_length=32),
                        confirmation_code: str | None = Query(default=None, min_length=4, max_length=20),
                        limit: int = Query(default=10, ge=1, le=25),
@@ -121,7 +175,8 @@ def appointment_lookup(patient_phone: str = Query(min_length=7, max_length=32),
         statement = statement.where(
             Appointment.confirmation_code == confirmation_code.strip().upper()
         )
-    return db.scalars(statement).unique().all()
+    items = list(db.scalars(statement).unique().all())
+    return VoiceAppointmentsResponse(appointments=items, count=len(items))
 
 
 @router.post("/sessions", status_code=201)
