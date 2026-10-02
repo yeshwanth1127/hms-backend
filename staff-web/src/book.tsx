@@ -250,12 +250,13 @@ function Booking() {
         setDemo(c.is_demo);
         setDoctors(d);
         setBranches(b);
-        const match = d.find(
-          (a) =>
-            a.id === params.get("doctor") ||
-            a.slug === params.get("doctor") ||
-            a.name === params.get("doctor_name"),
-        );
+        const requestedDoctor = params.get("doctor");
+        const matches = d.filter((a) => requestedDoctor
+          ? a.id === requestedDoctor || a.slug === requestedDoctor
+          : a.name === params.get("doctor_name"));
+        // Names bridge website profiles to the live roster, but are not unique
+        // identifiers. Require an explicit choice rather than guessing.
+        const match = matches.length === 1 ? matches[0] : undefined;
         const place = b.find(
           (a) =>
             a.slug === params.get("branch") || a.id === params.get("branch"),
