@@ -481,3 +481,47 @@ class ModuleAudit(Base):
     actor: Mapped[str] = mapped_column(ForeignKey("staff_users.id"))
     enabled: Mapped[bool] = mapped_column(Boolean)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WebBookingSession(Base):
+    __tablename__ = 'web_booking_sessions'
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+    ip_hash: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(20), default='pending')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class BookingGate(Base):
+    __tablename__ = 'booking_gate'
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    touched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BookingOperationAudit(Base):
+    __tablename__ = 'booking_operation_audit'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    actor: Mapped[str] = mapped_column(String(160))
+    action: Mapped[str] = mapped_column(String(60))
+    record_id: Mapped[str] = mapped_column(String(64))
+    change: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class WaitlistEntry(Base):
+    __tablename__ = 'waitlist_entries'
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    phone: Mapped[str] = mapped_column(String(20), index=True)
+    patient_name: Mapped[str] = mapped_column(String(160))
+    doctor_id: Mapped[str] = mapped_column(ForeignKey('doctors.id'))
+    branch_id: Mapped[str] = mapped_column(ForeignKey('branches.id'))
+    consultation_type: Mapped[str] = mapped_column(String(32))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(20), default='waiting')
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    hold_id: Mapped[str | None] = mapped_column(ForeignKey('reservations.id'), nullable=True)
+    appointment_id: Mapped[str | None] = mapped_column(ForeignKey('appointments.id'), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

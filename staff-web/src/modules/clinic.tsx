@@ -1,3 +1,4 @@
+import { ScheduleBlocks, WaitlistDesk } from "./BookingOperations";
 import { NurseDesk } from "./NurseDesk";
 import { useState } from "react";
 import { CalendarDays, Plus } from "lucide-react";
@@ -77,11 +78,14 @@ function Appointments() {
         catalogue.refresh();
       }}
     >
-      <NurseDesk
-        api={api}
-        doctors={doctors.data ?? []}
-        branches={catalogue.data?.branches ?? []}
-      />
+      <>
+        <NurseDesk
+          api={api}
+          doctors={doctors.data ?? []}
+          branches={catalogue.data?.branches ?? []}
+        />
+        <WaitlistDesk />
+      </>
     </Resource>
   );
 }
@@ -271,6 +275,7 @@ function Schedules() {
           Refresh schedules
         </Button>
       </div>
+      <ScheduleBlocks />
       <Resource {...r}>
         {r.data?.some(
           (s) => doctorFilter === "all" || s.doctor_id === doctorFilter,

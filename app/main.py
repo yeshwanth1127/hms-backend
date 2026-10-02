@@ -8,6 +8,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from sqlalchemy import text
 
+from .web_booking import router as web_booking_router, verification_router
+from .booking_operations import router as booking_operations_router
 from .api import router
 from .admin import router as admin_router
 from .integrations import router as integrations_router
@@ -76,11 +78,11 @@ async def request_context(request: Request, call_next):
 
 @app.exception_handler(RequestValidationError)
 async def validation_error(request: Request, exc: RequestValidationError):
-    if request.url.path.startswith("/api/v1/staff/"):
+    if request.url.path.startswith(("/api/v1/staff/", "/api/v1/web/booking")):
         # Never echo submitted passwords in validation responses.
         errors = "; ".join(error["msg"] for error in exc.errors())
         return JSONResponse(status_code=422, content={"error": {
-            "code": "INVALID_STAFF_INPUT", "message": errors, "request_id": request.state.request_id,
+            "code": "INVALID_STAFF_INPUT" if request.url.path.startswith("/api/v1/staff/") else "INVALID_BOOKING_INPUT", "message": errors, "request_id": request.state.request_id,
         }})
     return await request_validation_exception_handler(request, exc)
 
@@ -127,3 +129,7 @@ app.include_router(posthog_growth_router)
 
 from .demo.router import router as demo_router
 app.include_router(demo_router)
+
+app.include_router(web_booking_router)
+app.include_router(verification_router)
+app.include_router(booking_operations_router)

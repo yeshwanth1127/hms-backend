@@ -1,3 +1,4 @@
+import { RescheduleVisit } from "./BookingOperations";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
@@ -521,6 +522,19 @@ export function NurseDesk({
               </dl>
               <Separator />
               <div className="flex flex-wrap gap-2">
+                {selected.status === "confirmed" &&
+                  new Date(selected.starts_at).getTime() > clock && (
+                    <RescheduleVisit
+                      item={selected}
+                      onSaved={(item) => {
+                        setSelected(item);
+                        void load();
+                        setNotice(
+                          "Visit rescheduled; review patient notification.",
+                        );
+                      }}
+                    />
+                  )}
                 {selected.status === "confirmed" && (
                   <Button
                     disabled={!!saving}

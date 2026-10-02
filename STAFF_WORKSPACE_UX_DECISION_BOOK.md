@@ -375,3 +375,11 @@ Next validation should involve a receptionist performing five representative tas
 - `WHATSAPP_OUTREACH.md` — patient consent, campaigns, follow-ups and rollout contracts.
 - `STAFF_WORKSPACE.md` — account setup, routes and deployment instructions.
 - `GROWTH_UX_DECISION_BOOK.md` — detailed companion decisions for Google Business and growth analytics.
+
+## Appointment journey extension (October 2026)
+
+The patient booking screen uses the existing shadcn components and typography. The order is doctor/clinic/date, phone verification, a temporary time hold, fee and consent review, then a persisted receipt. Availability is visible before verification but reservation needs verified ownership. Verification opens a prepared WhatsApp message rather than inventing an SMS service. Reminder consent is separate from privacy acceptance and never implies marketing consent. Expired sessions clear patient information from the screen and ask for verification again.
+
+The receipt distinguishes test data and queued reminders, includes directions/arrival information, and exposes calendar download and visit management. Cancellation uses a shadcn confirmation dialog. A changed fee requires a new selection and explicit review. Unknown website doctor identifiers prompt selection from the actual backend roster instead of selecting an invented match.
+
+Staff disruption controls sit in Schedules; visit rescheduling and waitlist offers sit in Appointments. A schedule block shows affected appointments before saving, requires acknowledgement, and preserves visits for staff resolution. Waitlist offers show their expiry and contact boundary. Neither a block nor an offer silently sends a message. Growth/profile access stays in its separate RBAC module.

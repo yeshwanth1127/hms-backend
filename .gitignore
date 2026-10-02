@@ -19,3 +19,5 @@ htmlcov/
 app/staff_static/
 staff-web/.vite/
 .local/
+
+output/

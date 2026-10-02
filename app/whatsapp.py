@@ -401,40 +401,10 @@ def appointment_reschedule(appointment_id: str, body: WhatsAppReschedule,
         if operation.owner_key != key or operation.appointment_id != appointment_id or operation.new_reservation_id != body.new_hold_id:
             raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
         return _appointment_row(db, _owned_appointment(db, appointment_id, body.sender_id))
-    item = _owned_appointment(db, appointment_id, body.sender_id)
-    # Appointment eagerly joins its reservation. PostgreSQL cannot lock the
-    # nullable side of that outer join; lock the appointment row explicitly.
-    item = db.scalar(select(Appointment).where(Appointment.id == item.id).with_for_update(of=Appointment))
-    new_hold = db.scalar(select(Reservation).where(Reservation.id == body.new_hold_id).with_for_update())
-    if not new_hold or new_hold.owner_key != key:
-        raise DomainError("HOLD_NOT_FOUND", "The replacement slot hold was not found.", 404)
-    if item.status != "confirmed" or new_hold.status != "active" or not new_hold.expires_at or _utc(new_hold.expires_at) <= utcnow():
-        raise DomainError("RESCHEDULE_UNAVAILABLE", "This appointment or replacement hold is no longer available.", 409)
-    if new_hold.id == item.reservation_id:
-        raise DomainError("INVALID_SLOT", "Choose a different slot.", 422)
-    old_reservation = item.reservation
-    old_reservation.status = "released"
-    new_hold.status = "booked"
-    new_hold.expires_at = None
-    item.reservation_id = new_hold.id
-    item.reservation = new_hold
-    db.add(RescheduleOperation(idempotency_key=body.idempotency_key, owner_key=key,
-                               appointment_id=item.id, new_reservation_id=new_hold.id))
-    db.add(AppointmentStatusHistory(appointment_id=item.id, from_status="confirmed", to_status="confirmed",
-                                    actor_type="whatsapp", actor_id=key, reason="rescheduled"))
-    db.add(OutboxEvent(event_type="appointment.rescheduled", aggregate_id=item.id,
-                       payload={"appointment_id": item.id, "confirmation_code": item.confirmation_code}))
-    reminder = db.scalar(select(ReminderJob).where(ReminderJob.appointment_id == item.id))
-    if reminder and reminder.status != "sent":
-        reminder.due_at = max(utcnow(), _utc(new_hold.starts_at) - timedelta(days=1))
-        reminder.status = "pending"
-        reminder.claimed_at = None
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise DomainError("RESCHEDULE_CONFLICT", "The appointment could not be moved.", 409) from exc
-    db.refresh(item)
+    _owned_appointment(db, appointment_id, body.sender_id)
+    from .booking_operations import move_appointment
+    item = move_appointment(db, appointment_id, body.new_hold_id, key, body.idempotency_key,
+        key, 'Patient rescheduled on WhatsApp', actor_type='whatsapp')
     return _appointment_row(db, item)
 
 

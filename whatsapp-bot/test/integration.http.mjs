@@ -35,6 +35,9 @@ test('signed WhatsApp webhook and worker use real HMS bookings, uploads and pers
   const migrated = spawnSync(python, ['-m', 'alembic', 'upgrade', 'head'], { cwd: root, env, encoding: 'utf8' });
   assert.equal(migrated.status, 0, migrated.stderr || migrated.error?.message);
   const port = await unusedPort();
+  env.WEB_BOOKING_ENABLED = 'true';
+  env.WHATSAPP_BOOKING_NUMBER = '919700000000';
+  env.WEB_BOOKING_ORIGIN = `http://127.0.0.1:${port}`;
   const baseUrl = `http://127.0.0.1:${port}`;
   const api = spawn(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port), '--no-access-log'],
     { cwd: root, env, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -104,6 +107,40 @@ test('signed WhatsApp webhook and worker use real HMS bookings, uploads and pers
     assert.equal(await worker(), false);
     return { reply: sent.at(-1).reply, body, id };
   };
+
+  // Browser request -> signed sender webhook -> durable worker -> verified DB session.
+  const begin = await fetch(`${baseUrl}/api/v1/web/booking/session`, { method: 'POST',
+    headers: { Origin: baseUrl, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phone: sender, privacy_accepted: true }) });
+  assert.equal(begin.status, 201);
+  const browserCookie = begin.headers.get('set-cookie').split(';')[0];
+  const verification = await begin.json();
+  const message = new URL(verification.verification_url).searchParams.get('text');
+  const verifiedReply = await send(null, message);
+  assert.match(verifiedReply.reply.text, /number is verified/i);
+  const sessionResponse = await fetch(`${baseUrl}/api/v1/web/booking/session`, { headers: { Cookie: browserCookie } });
+  assert.equal((await sessionResponse.json()).status, 'verified');
+  const day = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+  let browserSlots = await backend.availability(doctor.id, branch.id, day, new Date(Date.now()+7*86400000).toISOString().slice(0,10));
+  const browserHeaders = { Cookie: browserCookie, Origin: baseUrl, 'X-Booking-CSRF': verification.csrf_token, 'Content-Type': 'application/json' };
+  const browserHold = await fetch(`${baseUrl}/api/v1/web/booking/holds`, { method: 'POST', headers: browserHeaders,
+    body: JSON.stringify({ ...browserSlots.slots.at(-1), idempotency_key: 'browser-http-hold' }) });
+  assert.equal(browserHold.status, 201);
+  const browserConfirm = { hold_id: (await browserHold.json()).id, patient_name: 'Synthetic Browser Patient',
+    expected_fee: doctor.consultation_fee, consent_to_reminders: true, acquisition_source: 'google_business', idempotency_key: 'browser-http-confirm' };
+  const confirmed = await fetch(`${baseUrl}/api/v1/web/booking/appointments`, { method:'POST', headers:browserHeaders, body:JSON.stringify(browserConfirm) });
+  assert.equal(confirmed.status, 201);
+  const webVisit = await confirmed.json();
+  const repeated = await fetch(`${baseUrl}/api/v1/web/booking/appointments`, { method:'POST', headers:browserHeaders, body:JSON.stringify(browserConfirm) });
+  assert.equal((await repeated.json()).id, webVisit.id);
+  const staffRows = await fetch(`${baseUrl}/api/v1/admin/appointments`, { headers:{'X-Admin-Key':key} }).then(r=>r.json());
+  assert.ok(staffRows.some(a=>a.id===webVisit.id && a.origin_channel==='web'));
+  const dbCheck = spawnSync(python, ['-c', `from app.db import SessionLocal; from app.models import Appointment, Reservation, OutboxEvent, ReminderJob; from sqlalchemy import select,func; db=SessionLocal(); a=db.get(Appointment,'${webVisit.id}'); assert a is not None and a.reservation.status=='booked' and a.acquisition_source=='google_business'; assert db.scalar(select(func.count()).select_from(OutboxEvent).where(OutboxEvent.aggregate_id==a.id,OutboxEvent.event_type=='appointment.confirmed'))==1; assert db.scalar(select(func.count()).select_from(ReminderJob).where(ReminderJob.appointment_id==a.id))==1; db.close()`], {cwd:root,env,encoding:'utf8'});
+  assert.equal(dbCheck.status,0,dbCheck.stderr);
+  const cancelledWeb = await fetch(`${baseUrl}/api/v1/web/booking/appointments/${webVisit.id}/cancel`, { method:'POST', headers:browserHeaders, body:JSON.stringify({reason:'Synthetic cancellation'}) });
+  assert.equal((await cancelledWeb.json()).status,'cancelled');
+  sent.length = 0;
+
   assert.equal((await post(bodyFor({ id: 'wamid.invalid', from: sender, type: 'text', text: { body: 'hi' } }), 'sha256=invalid')).status, 403);
   const welcome = await send(null, 'hi');
   assert.equal(welcome.reply.kind, 'buttons');

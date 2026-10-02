@@ -36,6 +36,7 @@ export default defineConfig({
       input: {
         staff: path.resolve(import.meta.dirname, "index.html"),
         talk: path.resolve(import.meta.dirname, "talk.html"),
+        book: path.resolve(import.meta.dirname, "book.html"),
       },
     },
   },

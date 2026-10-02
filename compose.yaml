@@ -8,6 +8,9 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://avocado:avocado@postgres:5432/avocado
       REDIS_URL: redis://redis:6379/0
+      WEB_BOOKING_ENABLED: ${WEB_BOOKING_ENABLED:-false}
+      WEB_BOOKING_ORIGIN: ${WEB_BOOKING_ORIGIN:-}
+      WHATSAPP_BOOKING_NUMBER: ${WHATSAPP_BOOKING_NUMBER:-}
       STAFF_ORIGIN: ${STAFF_ORIGIN:-}
       BOOKING_ALLOWED_ORIGINS: ${BOOKING_ALLOWED_ORIGINS:-}
       ALLOWED_ORIGINS: http://localhost:5567
