@@ -52,7 +52,10 @@ test('signed WhatsApp webhook and worker use real HMS bookings, uploads and pers
     finally { clearTimeout(timer); }
   });
   let ready = false;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Startup seeds the disposable PostgreSQL catalogue. Wait for readiness within
+  // a deadline rather than a five-second poll count on slower hosts.
+  const startupDeadline = Date.now() + 30000;
+  while (Date.now() < startupDeadline) {
     ready = await fetch(`${baseUrl}/api/health/ready`).then((r) => r.ok).catch(() => false);
     if (ready) break;
     if (api.exitCode !== null) break;
