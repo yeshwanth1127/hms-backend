@@ -227,6 +227,17 @@ export function createLiveEngine({ backend, downloadMedia, welcomeImagePath,
     const value = raw.toLowerCase().replace(/\s+/g, ' ');
     const id = message.choiceId;
 
+    const verification = /^VERIFY WEB ([A-F0-9]{20})$/i.exec(raw);
+    if (message.type === 'text' && verification) {
+      if (!backend.verifyWebBooking) return 'Website verification is unavailable. Please contact reception.';
+      try {
+        const result = await backend.verifyWebBooking({ sender_id: sender, code: verification[1].toUpperCase() });
+        return result.message;
+      } catch (error) {
+        if (error instanceof BackendError && [404, 503, 403].includes(error.status)) return 'Verification is unavailable or expired. Return to the clinic website and try again.';
+        throw error;
+      }
+    }
     const prefs = backend.preferences ? await backend.preferences(sender) : null;
     if (message.type === 'text' && (/^(stop|unsubscribe|stop all)$/.test(value) || /^(stop offers|stop marketing)$/.test(value) || id?.startsWith('outreach.stop.'))) {
       if (!backend.changePreferences) return 'Message preferences are unavailable. Please contact the clinic.';

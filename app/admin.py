@@ -35,9 +35,6 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
-def _utc(value):
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
-
 
 def _appointment_row(db: Session, item: Appointment) -> dict:
     reservation = item.reservation
@@ -172,7 +169,7 @@ def admin_doctors(_: str = Depends(require_admin), db: Session = Depends(get_db)
 @router.patch("/doctors/{doctor_id}")
 def update_doctor(doctor_id: str, body: DoctorAdminUpdate,
                   _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    item = db.get(Doctor, doctor_id)
+    item = db.scalar(select(Doctor).where(Doctor.id == doctor_id).with_for_update())
     if not item:
         raise DomainError("DOCTOR_NOT_FOUND", "Doctor was not found.", 404)
     for key, value in body.model_dump(exclude_unset=True).items():
@@ -194,7 +191,7 @@ def schedules(doctor_id: str | None = None, _: str = Depends(require_admin), db:
 def create_schedule(body: ScheduleRuleCreate, _: str = Depends(require_admin), db: Session = Depends(get_db)):
     if body.ends_at_local <= body.starts_at_local:
         raise DomainError("INVALID_SCHEDULE", "Schedule end time must be after start time.", 422)
-    if not db.get(Doctor, body.doctor_id) or not db.get(Branch, body.branch_id):
+    if not db.scalar(select(Doctor).where(Doctor.id == body.doctor_id).with_for_update()) or not db.get(Branch, body.branch_id):
         raise DomainError("CATALOGUE_ITEM_NOT_FOUND", "Doctor or branch was not found.", 404)
     item = ScheduleRule(**body.model_dump())
     db.add(item)
@@ -208,6 +205,7 @@ def delete_schedule(schedule_id: str, _: str = Depends(require_admin), db: Sessi
     item = db.get(ScheduleRule, schedule_id)
     if not item:
         raise DomainError("SCHEDULE_NOT_FOUND", "Schedule rule was not found.", 404)
+    db.scalar(select(Doctor).where(Doctor.id == item.doctor_id).with_for_update())
     db.delete(item)
     db.commit()
 

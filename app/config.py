@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     posthog_project_id: int | None = Field(default=None, gt=0)
     posthog_read_key: SecretStr = SecretStr("")
     staff_origin: str = ""
+    web_booking_enabled: bool = False
+    web_booking_origin: str = ""
+    whatsapp_booking_number: str = ""
     slot_hold_minutes: int = 7
     admin_api_key: str = "dev-admin-key"
     voice_service_api_key: str = "dev-voice-service-key"

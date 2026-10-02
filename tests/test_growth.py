@@ -151,9 +151,17 @@ def test_confirmation_persists_source_and_demo_state_without_replay_reclassifica
     from app.services import confirm_appointment
     _, sessions = growth_client
     with sessions() as db:
+        from app.models import ScheduleRule
+        from datetime import time
+        from zoneinfo import ZoneInfo
+        day = (datetime.now(timezone.utc)+timedelta(days=1)).astimezone(ZoneInfo('Asia/Kolkata')).date()
+        begins = datetime.combine(day, time(9), tzinfo=ZoneInfo('Asia/Kolkata')).astimezone(timezone.utc)
+        db.add(ScheduleRule(doctor_id='doctor-a', branch_id='branch-a', consultation_type='in_person',
+            schedule_date=day, weekday=day.weekday(), effective_from=day, effective_until=day,
+            starts_at_local=time(9), ends_at_local=time(10), slot_minutes=30))
         now = datetime.now(timezone.utc)
         hold = Reservation(id=str(uuid4()), doctor_id="doctor-a", branch_id="branch-a", consultation_type="in_person",
-                           starts_at=now+timedelta(days=1), ends_at=now+timedelta(days=1, minutes=30),
+                           starts_at=begins, ends_at=begins+timedelta(minutes=30),
                            status="active", owner_key="owner", expires_at=now+timedelta(minutes=5),
                            idempotency_key=str(uuid4()))
         db.add(hold)

@@ -1,7 +1,7 @@
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator, field_validator
 
 
 class APIModel(BaseModel):
@@ -93,6 +93,11 @@ class HoldOut(APIModel):
     ends_at: datetime
     status: str
     expires_at: datetime | None
+
+    @field_validator('starts_at', 'ends_at', 'expires_at')
+    @classmethod
+    def utc_output(cls, value):
+        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
 
 
 class AppointmentCreate(BaseModel):

@@ -61,6 +61,7 @@ export function createBackendClient({ baseUrl, serviceKey, fetchImpl = fetch }) 
     availability: (doctorId, branchId, startDate, endDate, consultationType = 'in_person') => request('GET', '/availability', {
       query: { doctor_id: doctorId, branch_id: branchId, start_date: startDate, end_date: endDate, consultation_type: consultationType },
     }),
+    verifyWebBooking: (body) => request('POST', '/web-booking/verify', { body }),
     hold: (body) => request('POST', '/slot-holds', { body }),
     releaseHold: (id, senderId) => request('DELETE', `/slot-holds/${encodeURIComponent(id)}`, { query: { sender_id: senderId } }),
     book: (body) => request('POST', '/appointments', { body }),
