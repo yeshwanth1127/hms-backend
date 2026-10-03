@@ -11,6 +11,7 @@ import {
   PageTitle,
   Resource,
   StateBadge,
+  usePermissions,
   useResource,
 } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
@@ -90,7 +91,8 @@ function Appointments() {
   );
 }
 function Doctors() {
-  const r = useResource<Doctor[]>("/api/v1/admin/doctors"),
+  const permissions = usePermissions(),
+    r = useResource<Doctor[]>("/api/v1/admin/doctors"),
     [edit, setEdit] = useState<Doctor | null>(null);
   return (
     <>
@@ -132,9 +134,15 @@ function Doctors() {
                     <StateBadge value={d.is_active ? "active" : "inactive"} />
                   </TableCell>
                   <TableCell>
-                    <Button variant="outline" onClick={() => setEdit(d)}>
-                      Edit doctor
-                    </Button>
+                    {permissions.can("doctors.manage") ? (
+                      <Button variant="outline" onClick={() => setEdit(d)}>
+                        Edit doctor
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">
+                        Administrator only
+                      </span>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -158,11 +166,16 @@ function Doctors() {
               <Field
                 label="Consultation fee (₹)"
                 id="doctor-fee"
-                hint="Changes apply to future bookings; existing fee snapshots are preserved."
+                hint={
+                  permissions.admin
+                    ? "Changes apply to future bookings; existing fee snapshots are preserved."
+                    : "Only a clinic administrator can change fees."
+                }
               >
                 <Input
                   id="doctor-fee"
                   type="number"
+                  disabled={!permissions.admin}
                   min={0}
                   max={100000}
                   value={edit.consultation_fee}
@@ -202,8 +215,10 @@ function Doctors() {
                     method: "PATCH",
                     body: {
                       is_active: edit.is_active,
-                      consultation_fee: edit.consultation_fee,
                       accepts_virtual: edit.accepts_virtual,
+                      ...(permissions.admin
+                        ? { consultation_fee: edit.consultation_fee }
+                        : {}),
                     },
                   });
                   setEdit(null);
@@ -235,7 +250,8 @@ function Schedules() {
     [start, setStart] = useState("09:00"),
     [end, setEnd] = useState("17:00"),
     [minutes, setMinutes] = useState(30),
-    [remove, setRemove] = useState<Schedule | null>(null);
+    [remove, setRemove] = useState<Schedule | null>(null),
+    canEdit = usePermissions().can("schedules.manage");
   const chosen = doctors.data?.find((d) => d.id === doctor),
     branches =
       catalogue.data?.branches.filter(
@@ -251,7 +267,7 @@ function Schedules() {
         title="Schedules"
         description="Weekly doctor availability controls the slots patients can book."
         action={
-          <Button onClick={() => setOpen(true)}>
+          <Button disabled={!canEdit} onClick={() => setOpen(true)}>
             <Plus />
             Add schedule
           </Button>
@@ -338,7 +354,11 @@ function Schedules() {
                       </TableCell>
                       <TableCell>{s.slot_minutes} minutes</TableCell>
                       <TableCell>
-                        <Button variant="outline" onClick={() => setRemove(s)}>
+                        <Button
+                          variant="outline"
+                          disabled={!canEdit}
+                          onClick={() => setRemove(s)}
+                        >
                           Remove rule
                         </Button>
                       </TableCell>

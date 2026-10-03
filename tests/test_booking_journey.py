@@ -338,3 +338,16 @@ def test_postgres_overlapping_holds_and_identical_retry_are_serialized(journey):
     assert results[0]==results[1] and results[0]!='SLOT_NO_LONGER_AVAILABLE'
     with sessions() as db:
         assert db.scalar(select(func.count()).select_from(Reservation).where(Reservation.idempotency_key=='same-operation-key'))==1
+
+
+def test_verified_session_cannot_squat_more_than_two_slots(journey):
+    client,_,day=journey
+    headers=verified(client)
+    free=slots(client,day)
+    keys=[str(uuid4()) for _ in range(3)]
+    for slot,k in zip(free[:2],keys):
+        assert client.post('/api/v1/web/booking/holds',headers=headers,json={**slot,'idempotency_key':k}).status_code==201
+    blocked=client.post('/api/v1/web/booking/holds',headers=headers,json={**free[2],'idempotency_key':keys[2]})
+    assert blocked.status_code==429 and blocked.json()['error']['code']=='HOLD_LIMIT'
+    # Replaying an existing hold is not a new hold.
+    assert client.post('/api/v1/web/booking/holds',headers=headers,json={**free[0],'idempotency_key':keys[0]}).status_code==201

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import or_, select, func, update, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from . import audit
 from .config import settings
 from .db import get_db
 from .client_modules import ensure_module
@@ -23,6 +24,7 @@ from .whatsapp import require_whatsapp_service
 router = APIRouter(prefix='/api/v1/web/booking', tags=['web-booking'])
 verification_router = APIRouter(prefix='/api/v1/integrations/whatsapp', tags=['web-verification'])
 COOKIE = 'hms_booking_session'
+MAX_ACTIVE_HOLDS = 2
 
 
 def digest(value):
@@ -50,11 +52,12 @@ def session_for(request, db, verified=True):
     session = db.get(WebBookingSession, digest(token)) if token else None
     if not session or session.status == 'revoked' or _db_utc(session.expires_at) <= utcnow():
         raise DomainError('BOOKING_SESSION_EXPIRED', 'Verify your WhatsApp number again.', 401)
+    audit.actor('patient_web', session.token_hash[:16], f'Website patient ···{session.phone[-4:]}')
     if verified and session.status != 'verified':
         raise DomainError('WHATSAPP_VERIFICATION_REQUIRED', 'Send the verification message from your WhatsApp number.', 401)
     if request.method not in {'GET', 'HEAD'}:
         origin(request)
-        if not secrets.compare_digest(request.headers.get('X-Booking-CSRF', ''), digest('csrf:' + token)):
+        if not secrets.compare_digest(request.headers.get('X-Booking-CSRF', '').encode(), digest('csrf:' + token).encode()):
             raise DomainError('BOOKING_CSRF_REQUIRED', 'Refresh booking and try again.', 403)
     return session
 
@@ -169,8 +172,14 @@ class WebHold(StrictBody):
 @router.post('/holds', response_model=HoldOut, status_code=201)
 def hold(body: WebHold, request: Request, db: Session=Depends(get_db)):
     item = session_for(request, db)
+    operation = key(item, body.idempotency_key)
+    # One verified number must not squat a doctor's calendar; the page holds one slot at a time.
+    if not db.scalar(select(Reservation.id).where(Reservation.idempotency_key == operation)) and db.scalar(
+            select(func.count()).select_from(Reservation).where(Reservation.owner_key == owner(item),
+            Reservation.status == 'active', Reservation.expires_at > utcnow())) >= MAX_ACTIVE_HOLDS:
+        raise DomainError('HOLD_LIMIT', 'Release your current time before choosing another.', 429)
     return create_hold(db, HoldCreate(**body.model_dump(exclude={'idempotency_key'}),
-                       owner_key=owner(item), idempotency_key=key(item, body.idempotency_key)))
+                       owner_key=owner(item), idempotency_key=operation))
 
 
 @router.delete('/holds/{hold_id}', status_code=204)

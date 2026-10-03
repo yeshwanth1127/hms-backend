@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     web_booking_origin: str = ""
     whatsapp_booking_number: str = ""
     slot_hold_minutes: int = 7
+    rate_limits_enabled: bool = True
     admin_api_key: str = "dev-admin-key"
     voice_service_api_key: str = "dev-voice-service-key"
     whatsapp_service_api_key: str = "dev-whatsapp-service-key"

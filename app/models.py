@@ -525,3 +525,29 @@ class WaitlistEntry(Base):
     hold_id: Mapped[str | None] = mapped_column(ForeignKey('reservations.id'), nullable=True)
     appointment_id: Mapped[str | None] = mapped_column(ForeignKey('appointments.id'), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AuditEvent(Base):
+    """Append-only record of every state-changing request, including denied and failed attempts."""
+    __tablename__ = 'audit_events'
+    __table_args__ = (Index('ix_audit_events_created', 'created_at'),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    request_id: Mapped[str] = mapped_column(String(80))
+    actor_type: Mapped[str] = mapped_column(String(20), index=True)
+    actor_id: Mapped[str] = mapped_column(String(80), index=True)
+    actor_label: Mapped[str] = mapped_column(String(160))
+    action: Mapped[str] = mapped_column(String(160), index=True)
+    targets: Mapped[dict] = mapped_column(JSON, default=dict)
+    target_text: Mapped[str] = mapped_column(String(400), default='', index=True)
+    change: Mapped[dict] = mapped_column(JSON, default=dict)
+    status_code: Mapped[int] = mapped_column(Integer)
+    client_ip: Mapped[str] = mapped_column(String(64))
+
+
+class StaffPermission(Base):
+    """Owner-chosen capabilities for the staff role; admins always hold every capability."""
+    __tablename__ = 'staff_permissions'
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    allowed: Mapped[bool] = mapped_column(Boolean)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

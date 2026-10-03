@@ -68,6 +68,16 @@ export interface DeskAppointment {
   consultation_type: string;
   doctor?: { id: string; name: string };
   branch?: { id: string; name: string; area: string };
+  notification_state?: "whatsapp_queued" | "call_patient";
+  notification_reason?: string;
+}
+/** After a staff change: was the patient told, or must reception call? */
+export function patientNotice(item: DeskAppointment) {
+  if (item.notification_state === "whatsapp_queued")
+    return " The patient will get a WhatsApp message.";
+  if (item.notification_state === "call_patient")
+    return ` Call the patient: ${item.notification_reason}.`;
+  return "";
 }
 type Api = <T>(
   path: string,
@@ -137,37 +147,40 @@ export function NurseDesk({
   const invalidateRequests = useCallback(() => {
     generation.current++;
   }, []);
-  const load = useCallback(async () => {
-    const request = ++generation.current;
-    setLoading(true);
-    setError("");
-    const params = new URLSearchParams({
-      offset: String(offset),
-      limit: String(pageSize + 1),
-    });
-    if (day) params.set("day", day);
-    if (query.trim()) params.set("query", query.trim());
-    if (doctor !== "all") params.set("doctor_id", doctor);
-    if (branch !== "all") params.set("branch_id", branch);
-    if (status !== "all") params.set("status", status);
-    try {
-      const result = await api<DeskAppointment[]>(
-        `/api/v1/admin/appointments?${params}`,
-      );
-      if (request !== generation.current) return;
-      setItems(result.slice(0, pageSize));
-      setMore(result.length > pageSize);
-      setUpdated(time(new Date().toISOString()));
-      setClock(Date.now());
-    } catch (e) {
-      if (request === generation.current)
-        setError(
-          e instanceof Error ? e.message : "Could not load appointments.",
+  const load = useCallback(
+    async (quiet = false) => {
+      const request = ++generation.current;
+      if (!quiet) setLoading(true);
+      setError("");
+      const params = new URLSearchParams({
+        offset: String(offset),
+        limit: String(pageSize + 1),
+      });
+      if (day) params.set("day", day);
+      if (query.trim()) params.set("query", query.trim());
+      if (doctor !== "all") params.set("doctor_id", doctor);
+      if (branch !== "all") params.set("branch_id", branch);
+      if (status !== "all") params.set("status", status);
+      try {
+        const result = await api<DeskAppointment[]>(
+          `/api/v1/admin/appointments?${params}`,
         );
-    } finally {
-      if (request === generation.current) setLoading(false);
-    }
-  }, [api, offset, day, query, doctor, branch, status]);
+        if (request !== generation.current) return;
+        setItems(result.slice(0, pageSize));
+        setMore(result.length > pageSize);
+        setUpdated(time(new Date().toISOString()));
+        setClock(Date.now());
+      } catch (e) {
+        if (request === generation.current)
+          setError(
+            e instanceof Error ? e.message : "Could not load appointments.",
+          );
+      } finally {
+        if (request === generation.current) setLoading(false);
+      }
+    },
+    [api, offset, day, query, doctor, branch, status],
+  );
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 250);
     return () => {
@@ -175,6 +188,13 @@ export function NurseDesk({
       invalidateRequests();
     };
   }, [load, invalidateRequests]);
+  useEffect(() => {
+    // Several nurses edit the same day; keep the list current while it is on screen.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible" && !saving) void load(true);
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [load, saving]);
   const change = (setter: (v: string) => void, value: string) => {
     setter(value);
     setOffset(0);
@@ -191,12 +211,16 @@ export function NurseDesk({
       setSelected((current) => (current?.id === result.id ? result : current));
       setPending(null);
       setReason("");
-      setNotice(`${item.patient_name}: ${title(next).toLowerCase()}.`);
+      setNotice(
+        `${item.patient_name}: ${title(next).toLowerCase()}.${patientNotice(result)}`,
+      );
       await load();
     } catch (e) {
       setError(
         e instanceof Error ? e.message : "Could not update appointment.",
       );
+      // Another nurse may have changed this visit; show its current state.
+      await load();
     } finally {
       setSaving("");
     }
@@ -529,9 +553,7 @@ export function NurseDesk({
                       onSaved={(item) => {
                         setSelected(item);
                         void load();
-                        setNotice(
-                          "Visit rescheduled; review patient notification.",
-                        );
+                        setNotice(`Visit rescheduled.${patientNotice(item)}`);
                       }}
                     />
                   )}

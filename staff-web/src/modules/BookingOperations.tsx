@@ -5,6 +5,7 @@ import {
   Choice,
   Field,
   Resource,
+  usePermissions,
   useResource,
 } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
@@ -64,7 +65,8 @@ export function ScheduleBlocks() {
     [end, setEnd] = useState(""),
     [reason, setReason] = useState(""),
     [preview, setPreview] = useState<DeskAppointment[] | null>(null),
-    [remove, setRemove] = useState<Block | null>(null);
+    [remove, setRemove] = useState<Block | null>(null),
+    canBlock = usePermissions().can("schedule.block");
   const body = {
     doctor_id: doctor,
     branch_id: branch === "all" ? null : branch,
@@ -88,6 +90,7 @@ export function ScheduleBlocks() {
       <CardContent className="space-y-4">
         <Button
           variant="outline"
+          disabled={!canBlock}
           onClick={() => {
             setOpen(true);
             setPreview(null);
@@ -114,7 +117,11 @@ export function ScheduleBlocks() {
                       : "All clinics"}
                   </p>
                 </div>
-                <Button variant="outline" onClick={() => setRemove(b)}>
+                <Button
+                  variant="outline"
+                  disabled={!canBlock}
+                  onClick={() => setRemove(b)}
+                >
                   Unblock
                 </Button>
               </div>
@@ -129,7 +136,7 @@ export function ScheduleBlocks() {
           <DialogHeader>
             <DialogTitle>Block unavailable time</DialogTitle>
             <DialogDescription>
-              Times entered here are India Standard Time. Preview affected
+              Times entered here are India Standard Time. Check affected
               visits before saving. No patient notification is sent by this
               action.
             </DialogDescription>
@@ -189,7 +196,7 @@ export function ScheduleBlocks() {
               }
               success="Affected visits reviewed"
             >
-              Preview affected visits
+              Check affected visits
             </Action>
             {preview && (
               <>
@@ -357,7 +364,7 @@ export function RescheduleVisit({
               onSaved(result);
               setOpen(false);
             }}
-            success="Visit rescheduled; review patient notification"
+            success="Visit rescheduled"
           >
             Confirm agreed replacement
           </Action>

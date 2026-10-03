@@ -80,6 +80,8 @@ def current_staff(request: Request, db: Session, *, mutate=False):
         session.last_seen_at = now
         db.commit()
     request.state.staff_user = user
+    from . import audit
+    audit.actor("staff", user.id, staff_label(user))
     return user, session
 
 
@@ -149,6 +151,8 @@ def login_limits(db, request, login_name):
 def login(body: Login, request: Request, response: Response, db: Session = Depends(get_db)):
     check_origin(request)
     name = body.username.strip().lower()
+    from . import audit
+    audit.note(username=name[:64])
     login_limits(db, request, name)
     user = db.scalar(select(StaffUser).where(StaffUser.username == name))
     try:
@@ -157,6 +161,7 @@ def login(body: Login, request: Request, response: Response, db: Session = Depen
         valid = False
     if not valid or not user or not user.is_active:
         raise DomainError("STAFF_LOGIN_FAILED", "The username or password is incorrect.", 401)
+    audit.actor("staff", user.id, staff_label(user))
     old = request.cookies.get(COOKIE)
     if old:
         db.execute(delete(StaffSession).where(StaffSession.token_hash == digest(old)))
@@ -202,6 +207,8 @@ def create_user(body: CreateUser, _=Depends(require_staff_owner), db: Session = 
     except IntegrityError:
         db.rollback()
         raise DomainError("USERNAME_TAKEN", "That username is already in use.", 409)
+    from . import audit
+    audit.note(targets={"user_id": user.id}, created={"username": user.username, "role": user.role})
     return user_row(user)
 
 

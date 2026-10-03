@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api/v1/integrations/whatsapp", tags=["whatsapp-integ
 
 
 def require_whatsapp_service(request: Request, x_service_key: str = Header(alias="X-Service-Key"), db: Session = Depends(get_db)) -> None:
-    if not secrets.compare_digest(x_service_key, settings.whatsapp_service_api_key):
+    if not secrets.compare_digest(x_service_key.encode(), settings.whatsapp_service_api_key.encode()):
         raise DomainError("SERVICE_AUTH_REQUIRED", "A valid WhatsApp service key is required.", 401)
 
     from .demo import block_transport
@@ -190,7 +190,7 @@ def inbound_claim(_: None = Depends(require_whatsapp_service), db: Session = Dep
 def _claimed_inbound(db: Session, message_id: str, body: WhatsAppInboundTransition,
                      status: str) -> WhatsAppInbound:
     item = db.get(WhatsAppInbound, message_id)
-    if not item or item.status != status or not item.claim_token or not secrets.compare_digest(item.claim_token, body.claim_token):
+    if not item or item.status != status or not item.claim_token or not secrets.compare_digest(item.claim_token.encode(), body.claim_token.encode()):
         raise DomainError("INBOUND_CLAIM_LOST", "Message claim is no longer active.", 409)
     return item
 
@@ -219,7 +219,7 @@ def inbound_sent(message_id: str, body: WhatsAppInboundTransition,
 def inbound_failed(message_id: str, body: WhatsAppInboundTransition,
                    _: None = Depends(require_whatsapp_service), db: Session = Depends(get_db)):
     item = db.get(WhatsAppInbound, message_id)
-    if not item or item.status not in ("processing", "sending") or not item.claim_token or not secrets.compare_digest(item.claim_token, body.claim_token):
+    if not item or item.status not in ("processing", "sending") or not item.claim_token or not secrets.compare_digest(item.claim_token.encode(), body.claim_token.encode()):
         raise DomainError("INBOUND_CLAIM_LOST", "Message claim is no longer active.", 409)
     item.last_error = body.error
     if item.status == "sending":

@@ -447,3 +447,34 @@ def test_delivery_callback_racing_send_completion_is_not_lost(setup, monkeypatch
         assert callback.result(timeout=10).status_code == 200
     with factory() as db:
         assert db.get(WhatsAppOutbound, job["id"]).status == "read"
+
+
+def test_staff_reschedule_and_cancel_tell_the_patient_once_or_ask_for_a_call(setup):
+    c, factory = setup
+    response, doctor, branch = book(c, "change")
+    item = response.json()
+    day = outreach.utc(datetime.fromisoformat(item["reservation"]["starts_at"])).date()
+    slots = c.get(P + "/availability", headers=S, params={"doctor_id": doctor["id"], "branch_id": branch["id"], "start_date": day.isoformat(), "end_date": day.isoformat()}).json()["slots"]
+    move = {**{k: slots[-1][k] for k in ("starts_at", "ends_at")}, "idempotency_key": "move-change-1", "reason": "Doctor running late"}
+    moved = c.post(f"/api/v1/admin/appointments/{item['id']}/reschedule", headers=A, json=move)
+    assert moved.json()["notification_state"] == "call_patient" and moved.json()["notification_reason"] == "WhatsApp message not set up"
+
+    sync(c, category="UTILITY", text="Visit {{1}} with {{2}} is now at {{3}}.")
+    for kind in ("rescheduled", "cancelled"):
+        assert c.put(f"{D}/followup-rules/{kind}", headers=A, json={"template_id": "1001", "delay_hours": 0, "enabled": True}).status_code == 200
+    move = {**{k: slots[-2][k] for k in ("starts_at", "ends_at")}, "idempotency_key": "move-change-2", "reason": "Doctor running late"}
+    assert c.post(f"/api/v1/admin/appointments/{item['id']}/reschedule", headers=A, json=move).json()["notification_state"] == "whatsapp_queued"
+    assert c.post(f"/api/v1/admin/appointments/{item['id']}/reschedule", headers=A, json=move).status_code == 200  # retry
+    job = claim(c)
+    assert job["purpose"] == "rescheduled" and job["parameters"][0] == item["confirmation_code"]
+    assert claim(c) is None  # the retry queued nothing
+
+    cancelled = c.patch(f"/api/v1/admin/appointments/{item['id']}/status", headers=A, json={"status": "cancelled", "reason": "Doctor unavailable"})
+    assert cancelled.json()["notification_state"] == "whatsapp_queued"
+    assert sending(c, job).json()["send"] is False  # stale "moved" message is not sent after cancellation
+    assert claim(c)["purpose"] == "cancelled"
+
+    other, _, _ = book(c, "change-stopped")
+    put_pref(c, stopped_all=True)
+    stopped = c.patch(f"/api/v1/admin/appointments/{other.json()['id']}/status", headers=A, json={"status": "cancelled"})
+    assert stopped.json()["notification_reason"] == "patient stopped WhatsApp messages"

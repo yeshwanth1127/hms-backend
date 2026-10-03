@@ -2,6 +2,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +25,10 @@ from .client_modules import router as module_router
 from .staff_auth import router as staff_auth_router
 from .staff_portal import router as staff_portal_router
 from .config import settings
+from .limits import Limits
+from . import audit
+from .audit import router as audit_router
+from .permissions import router as permissions_router
 from .db import Base, SessionLocal, engine
 from .seed import seed_catalogue
 from .services import DomainError
@@ -41,6 +46,8 @@ async def lifespan(_: FastAPI):
             value = getattr(settings, name)
             if len(value) < 32 or value.startswith(("dev-", "replace-", "test-")):
                 raise RuntimeError(f"{name.upper()} must be a strong production secret")
+        if "*" in settings.origins:
+            raise RuntimeError("ALLOWED_ORIGINS cannot be a wildcard with credentialed staff sessions")
         if not settings.staff_origin.startswith("https://"):
             raise RuntimeError("STAFF_ORIGIN must be the HTTPS staff workspace origin in production")
         if not settings.database_url.startswith("postgresql+"):
@@ -65,8 +72,19 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credent
 async def request_context(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID") or f"req_{uuid.uuid4().hex}"
     request.state.request_id = request_id
-    response = await call_next(request)
+    context = audit.begin() if request.method in audit.WRITES else None
+    try:
+        response = await call_next(request)
+    except Exception:
+        if context is not None:
+            await write_audit(context, request, 500, request_id)
+        raise
+    if context is not None:
+        await write_audit(context, request, response.status_code, request_id)
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-Frame-Options"] = "DENY"
+    if settings.app_env == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     if request.url.path.startswith("/api/v1/") or request.url.path.startswith("/staff") or request.url.path == "/whatsapp-assets":
@@ -74,6 +92,16 @@ async def request_context(request: Request, call_next):
     if request.url.path.startswith("/staff") or request.url.path == "/whatsapp-assets":
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
     return response
+
+
+async def write_audit(context, request, status_code, request_id):
+    audit.resolve_actor(context, request)
+    await run_in_threadpool(audit.record, context, app=request.app, method=request.method, scope=request.scope, status_code=status_code,
+                            request_id=request_id, client_ip=request.client.host if request.client else "unknown")
+
+
+# Added last so it runs first: rejects floods and oversized bodies before any parsing or DB work.
+app.add_middleware(Limits)
 
 
 @app.exception_handler(RequestValidationError)
@@ -119,6 +147,8 @@ app.include_router(outreach_admin_router)
 app.include_router(outreach_service_router)
 
 app.include_router(staff_auth_router)
+app.include_router(audit_router)
+app.include_router(permissions_router)
 app.include_router(staff_portal_router)
 
 app.include_router(growth_router)

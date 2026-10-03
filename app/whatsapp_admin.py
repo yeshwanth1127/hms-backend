@@ -7,7 +7,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from . import audit
 from .admin import require_admin
+from .permissions import require_capability
 from .client_modules import require_whatsapp_module
 from .db import get_db
 from .media import asset_row, media_path, save_upload
@@ -42,7 +44,7 @@ def asset_inventory(_: str = Depends(require_admin), db: Session = Depends(get_d
 
 @router.post("/departments/{department_id}/guide", status_code=201)
 async def guide_upload(department_id: str, file: UploadFile = File(),
-                       _: str = Depends(require_admin), db: Session = Depends(get_db)):
+                       _: str = Depends(require_capability("media.manage")), db: Session = Depends(get_db)):
     department = db.get(Department, department_id)
     if not department:
         raise DomainError("DEPARTMENT_NOT_FOUND", "Department was not found.", 404)
@@ -55,7 +57,7 @@ async def guide_upload(department_id: str, file: UploadFile = File(),
 
 @router.post("/doctors/{doctor_id}/photo", status_code=201)
 async def photo_upload(doctor_id: str, file: UploadFile = File(),
-                       _: str = Depends(require_admin), db: Session = Depends(get_db)):
+                       _: str = Depends(require_capability("media.manage")), db: Session = Depends(get_db)):
     doctor = db.get(Doctor, doctor_id)
     if not doctor:
         raise DomainError("DOCTOR_NOT_FOUND", "Doctor was not found.", 404)
@@ -104,6 +106,7 @@ def case_status(case_id: str, body: SupportCaseStatusUpdate,
     item = db.get(SupportCase, case_id)
     if not item:
         raise DomainError("CASE_NOT_FOUND", "Case was not found.", 404)
+    audit.note(status={"from": item.status, "to": body.status})
     item.status = body.status
     db.commit()
     return {"id": item.id, "status": item.status}

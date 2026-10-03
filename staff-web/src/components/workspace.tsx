@@ -22,6 +22,20 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
+export type Permissions = {
+  role: string;
+  allowed: Record<string, boolean>;
+  staff: { key: string; label: string; allowed: boolean }[];
+};
+/** What the signed-in person may change. The server enforces the same rules. */
+export function usePermissions() {
+  const r = useResource<Permissions>("/api/v1/staff/permissions");
+  return {
+    ...r,
+    can: (key: string) => !!r.data?.allowed[key],
+    admin: r.data?.role === "admin",
+  };
+}
 export function useResource<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null),
     [error, setError] = useState(""),

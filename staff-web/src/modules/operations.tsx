@@ -86,7 +86,7 @@ function ActivityPage({ overview }: { overview: boolean }) {
           `${s.schedule_rules ?? 0} schedule rules`,
         ],
         [
-          "Pending notifications",
+          "Pending messages",
           s.pending_notifications,
           `${s.active_holds ?? 0} active slot holds`,
         ],
@@ -97,7 +97,7 @@ function ActivityPage({ overview }: { overview: boolean }) {
         ],
       ]
     : [
-        ["Pending events", s.pending_notifications, "Awaiting worker delivery"],
+        ["Pending messages", s.pending_notifications, "WhatsApp messages waiting to send"],
         ["Active holds", s.active_holds, "Temporary reservations"],
         [
           "API readiness",

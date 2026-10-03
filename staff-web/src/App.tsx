@@ -16,6 +16,7 @@ import {
   MessageCircle,
   Globe,
   ChartNoAxesCombined,
+  ScrollText,
   Settings2,
   Stethoscope,
   BookOpen,
@@ -404,6 +405,20 @@ export default function App() {
                       Settings
                     </NavigationButton>
                   </SidebarMenuItem>
+                  {user.role === "admin" && (
+                    <SidebarMenuItem>
+                      <NavigationButton
+                        isActive={
+                          current.module === "settings" &&
+                          current.page === "activity"
+                        }
+                        onClick={() => go("settings", "activity")}
+                      >
+                        <ScrollText />
+                        Activity log
+                      </NavigationButton>
+                    </SidebarMenuItem>
+                  )}
                   <SidebarMenuItem>
                     <NavigationButton onClick={() => go("settings", "design")}>
                       <BookOpen />

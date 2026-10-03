@@ -45,6 +45,7 @@ import {
   SectionTitle,
   StateBadge,
   TaskLink,
+  usePermissions,
   useResource,
 } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
@@ -382,7 +383,7 @@ function Overview({
                   "Offers and visit messages have separate consent.",
                 ],
                 [
-                  "Preview, test, approve",
+                  "Review, test, approve",
                   "Campaigns need a checked test and a fixed audience.",
                 ],
                 [
@@ -1023,9 +1024,19 @@ const ruleNames: Record<string, [string, string]> = {
     "Doctor-requested follow-up",
     "After staff select a follow-up date for a completed visit",
   ],
+  rescheduled: [
+    "Visit moved by the clinic",
+    "Sent straight away when staff reschedule a visit",
+  ],
+  cancelled: [
+    "Visit cancelled by the clinic",
+    "Sent straight away when staff cancel a visit",
+  ],
 };
+const immediate = ["rescheduled", "cancelled"];
 function Followups({ user }: { user: StaffUser }) {
-  const rules = useResource<Rule[]>(wa + "/followup-rules"),
+  const canManage = usePermissions().can("followups.manage"),
+    rules = useResource<Rule[]>(wa + "/followup-rules"),
     templates = useResource<Template[]>(wa + "/templates"),
     visits = useResource<Appointment[]>(
       "/api/v1/admin/appointments?status=completed",
@@ -1076,13 +1087,14 @@ function Followups({ user }: { user: StaffUser }) {
                   <TableCell>
                     <Button
                       variant="outline"
+                      disabled={!canManage}
                       onClick={() =>
                         setEdit(
                           rule ?? {
                             kind,
                             enabled: false,
                             template_id: options[0]?.[0] ?? "",
-                            delay_hours: 24,
+                            delay_hours: immediate.includes(kind) ? 0 : 24,
                           },
                         )
                       }
@@ -1208,21 +1220,23 @@ function Followups({ user }: { user: StaffUser }) {
                   }
                 />
               </Resource>
-              <Field
-                label="Delay after the visit event (hours)"
-                id="rule-delay"
-              >
-                <Input
+              {!immediate.includes(edit.kind) && (
+                <Field
+                  label="Delay after the visit event (hours)"
                   id="rule-delay"
-                  type="number"
-                  min={0}
-                  max={720}
-                  value={edit.delay_hours}
-                  onChange={(e) =>
-                    setEdit({ ...edit, delay_hours: Number(e.target.value) })
-                  }
-                />
-              </Field>
+                >
+                  <Input
+                    id="rule-delay"
+                    type="number"
+                    min={0}
+                    max={720}
+                    value={edit.delay_hours}
+                    onChange={(e) =>
+                      setEdit({ ...edit, delay_hours: Number(e.target.value) })
+                    }
+                  />
+                </Field>
+              )}
               <div className="flex items-center justify-between gap-3">
                 <Label htmlFor="rule-enabled" className="text-sm">
                   Enable consented messages

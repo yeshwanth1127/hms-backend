@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -15,6 +15,8 @@ from .models import (
     VoiceSession, utcnow,
 )
 from .schemas import AppointmentStatusUpdate, DoctorAdminUpdate, ScheduleRuleCreate, ScheduleRuleOut
+from . import audit
+from .permissions import require_capability
 from .services import DomainError
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -22,7 +24,11 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 def require_admin(request: Request, x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"), db: Session = Depends(get_db)) -> str:
     # Legacy keys remain server-to-server compatibility only; the staff UI uses cookies.
-    if x_admin_key and secrets.compare_digest(x_admin_key, settings.admin_api_key):
+    # Disabled in production: every production change must name a staff member.
+    if x_admin_key and settings.app_env != "production" and secrets.compare_digest(
+            x_admin_key.encode("latin-1", "replace"), settings.admin_api_key.encode()):
+        from . import audit
+        audit.actor("admin_key", "local-admin", "Local admin key")
         return "local-admin"
     from .staff_auth import current_staff
     user, _ = current_staff(request, db, mutate=request.method not in ("GET", "HEAD", "OPTIONS"))
@@ -54,42 +60,40 @@ def _appointment_row(db: Session, item: Appointment) -> dict:
 
 @router.get("/analytics")
 def analytics(_: str = Depends(require_admin), db: Session = Depends(get_db)):
+    # Aggregates in SQL: this dashboard polls, and the appointment table only grows.
+    from .models import WhatsAppOutbound
     now = datetime.now(timezone.utc)
-    appointments = db.scalars(select(Appointment).order_by(Appointment.created_at)).all()
-    reservations = db.scalars(select(Reservation)).all()
-    doctors = db.scalars(select(Doctor)).all()
-    rules = db.scalars(select(ScheduleRule)).all()
-    pending_outbox = db.scalars(select(OutboxEvent).where(OutboxEvent.processed_at.is_(None))).all()
-    voice_sessions = db.scalars(select(VoiceSession)).all()
-    by_status = Counter(item.status for item in appointments)
-    by_channel = Counter(item.origin_channel for item in appointments)
-    daily = []
-    for offset in range(13, -1, -1):
-        day = (now - timedelta(days=offset)).date()
-        daily.append({
-            "date": day.isoformat(),
-            "bookings": sum(1 for item in appointments if _utc(item.created_at).date() == day),
-        })
+    count = lambda model, *where: db.scalar(select(func.count()).select_from(model).where(*where))
+    by_status = dict(db.execute(select(Appointment.status, func.count()).group_by(Appointment.status)).all())
+    by_channel = dict(db.execute(select(Appointment.origin_channel, func.count()).group_by(Appointment.origin_channel)).all())
+    total = sum(by_status.values())
+    first_day = (now - timedelta(days=13)).date()
+    created = db.scalars(select(Appointment.created_at).where(
+        Appointment.created_at >= datetime.combine(first_day, datetime.min.time(), tzinfo=timezone.utc))).all()
+    per_day = Counter(_utc(value).date() for value in created)
+    daily = [{"date": (first_day + timedelta(days=i)).isoformat(), "bookings": per_day.get(first_day + timedelta(days=i), 0)} for i in range(14)]
     confirmed = by_status.get("confirmed", 0) + by_status.get("checked_in", 0) + by_status.get("completed", 0)
+    recent = db.scalars(select(Appointment).order_by(Appointment.created_at.desc()).limit(6)).all()
     return {
         "generated_at": now,
         "summary": {
-            "appointments_total": len(appointments),
+            "appointments_total": total,
             "appointments_confirmed": confirmed,
             "appointments_cancelled": by_status.get("cancelled", 0),
-            "appointments_upcoming": sum(1 for item in appointments if item.status == "confirmed" and _utc(item.reservation.starts_at) >= now),
-            "active_holds": sum(1 for item in reservations if item.status == "active" and item.expires_at and _utc(item.expires_at) > now),
-            "active_doctors": sum(1 for item in doctors if item.is_active),
-            "schedule_rules": sum(1 for item in rules if item.is_active),
-            "pending_notifications": len(pending_outbox),
-            "conversion_rate": round((confirmed / len(appointments) * 100) if appointments else 0, 1),
-            "voice_sessions_total": len(voice_sessions),
-            "voice_bookings": sum(1 for item in appointments if item.origin_channel in {"voice", "web_voice", "phone"}),
+            "appointments_upcoming": db.scalar(select(func.count()).select_from(Appointment).join(Reservation, Appointment.reservation_id == Reservation.id)
+                                               .where(Appointment.status == "confirmed", Reservation.starts_at >= now)),
+            "active_holds": count(Reservation, Reservation.status == "active", Reservation.expires_at > now),
+            "active_doctors": count(Doctor, Doctor.is_active.is_(True)),
+            "schedule_rules": count(ScheduleRule, ScheduleRule.is_active.is_(True)),
+            "pending_notifications": count(WhatsAppOutbound, WhatsAppOutbound.status.in_(("pending", "claimed"))),
+            "conversion_rate": round((confirmed / total * 100) if total else 0, 1),
+            "voice_sessions_total": count(VoiceSession),
+            "voice_bookings": sum(by_channel.get(key, 0) for key in ("voice", "web_voice", "phone")),
         },
         "by_status": [{"label": key, "value": value} for key, value in sorted(by_status.items())],
         "by_channel": [{"label": key, "value": value} for key, value in sorted(by_channel.items())],
         "daily_bookings": daily,
-        "recent_appointments": [_appointment_row(db, item) for item in appointments[-6:]][::-1],
+        "recent_appointments": [_appointment_row(db, item) for item in recent],
     }
 
 
@@ -139,6 +143,7 @@ def appointment_status(appointment_id: str, body: AppointmentStatusUpdate,
     if body.status in {"completed", "no_show"} and visit_start > utcnow():
         raise DomainError("VISIT_NOT_STARTED", "A future visit cannot be marked completed or no-show.", 409)
     previous = item.status
+    audit.note(targets={"code": item.confirmation_code}, status={"from": previous, "to": body.status})
     item.status = body.status
     if body.status == "cancelled":
         item.reservation.status = "released"
@@ -146,12 +151,15 @@ def appointment_status(appointment_id: str, body: AppointmentStatusUpdate,
                                     actor_type="administrator", actor_id=admin_id, reason=body.reason))
     db.add(OutboxEvent(event_type=f"appointment.{body.status}", aggregate_id=item.id,
                        payload={"appointment_id": item.id, "confirmation_code": item.confirmation_code}))
+    from .whatsapp_outreach import notify_change, queue_followup
+    notification = {}
     if body.status in {"completed", "no_show"}:
-        from .whatsapp_outreach import queue_followup
         queue_followup(db, item, "feedback" if body.status == "completed" else "no_show")
+    elif body.status == "cancelled":
+        notification = notify_change(db, item, "cancelled")
     db.commit()
     db.refresh(item)
-    return _appointment_row(db, item)
+    return {**_appointment_row(db, item), **notification}
 
 
 @router.get("/doctors")
@@ -167,12 +175,18 @@ def admin_doctors(_: str = Depends(require_admin), db: Session = Depends(get_db)
 
 
 @router.patch("/doctors/{doctor_id}")
-def update_doctor(doctor_id: str, body: DoctorAdminUpdate,
-                  _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def update_doctor(doctor_id: str, body: DoctorAdminUpdate, request: Request,
+                  _: str = Depends(require_capability("doctors.manage")), db: Session = Depends(get_db)):
     item = db.scalar(select(Doctor).where(Doctor.id == doctor_id).with_for_update())
     if not item:
         raise DomainError("DOCTOR_NOT_FOUND", "Doctor was not found.", 404)
-    for key, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    before = {key: getattr(item, key) for key in changes}
+    user = getattr(request.state, "staff_user", None)
+    if "consultation_fee" in changes and changes["consultation_fee"] != item.consultation_fee and user and user.role != "admin":
+        raise DomainError("FEE_ADMIN_ONLY", "Only a clinic administrator can change consultation fees.", 403)
+    audit.note(**audit.diff(before, changes))
+    for key, value in changes.items():
         setattr(item, key, value)
     db.commit()
     return {"id": item.id, "is_active": item.is_active, "consultation_fee": item.consultation_fee,
@@ -188,7 +202,7 @@ def schedules(doctor_id: str | None = None, _: str = Depends(require_admin), db:
 
 
 @router.post("/schedules", response_model=ScheduleRuleOut, status_code=201)
-def create_schedule(body: ScheduleRuleCreate, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def create_schedule(body: ScheduleRuleCreate, _: str = Depends(require_capability("schedules.manage")), db: Session = Depends(get_db)):
     if body.ends_at_local <= body.starts_at_local:
         raise DomainError("INVALID_SCHEDULE", "Schedule end time must be after start time.", 422)
     if not db.scalar(select(Doctor).where(Doctor.id == body.doctor_id).with_for_update()) or not db.get(Branch, body.branch_id):
@@ -197,14 +211,16 @@ def create_schedule(body: ScheduleRuleCreate, _: str = Depends(require_admin), d
     db.add(item)
     db.commit()
     db.refresh(item)
+    audit.note(targets={"schedule_id": item.id, "doctor_id": item.doctor_id}, added=body.model_dump(mode="json"))
     return item
 
 
 @router.delete("/schedules/{schedule_id}", status_code=204)
-def delete_schedule(schedule_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def delete_schedule(schedule_id: str, _: str = Depends(require_capability("schedules.manage")), db: Session = Depends(get_db)):
     item = db.get(ScheduleRule, schedule_id)
     if not item:
         raise DomainError("SCHEDULE_NOT_FOUND", "Schedule rule was not found.", 404)
+    audit.note(targets={"doctor_id": item.doctor_id}, removed=ScheduleRuleOut.model_validate(item).model_dump(mode="json"))
     db.scalar(select(Doctor).where(Doctor.id == item.doctor_id).with_for_update())
     db.delete(item)
     db.commit()

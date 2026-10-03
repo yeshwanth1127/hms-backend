@@ -378,7 +378,7 @@ export function GrowthModule({
             [
               "overview",
               "links",
-              "preview",
+              "journey",
               "capabilities",
               "history",
             ].includes(page)
@@ -390,7 +390,7 @@ export function GrowthModule({
           <TabsList className="mb-6 flex h-auto flex-wrap justify-start">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="links">Booking links</TabsTrigger>
-            <TabsTrigger value="preview">Patient preview</TabsTrigger>
+            <TabsTrigger value="journey">Patient journey</TabsTrigger>
             <TabsTrigger value="capabilities">Options</TabsTrigger>
             <TabsTrigger value="history">Change history</TabsTrigger>
           </TabsList>
@@ -456,8 +456,8 @@ export function GrowthModule({
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-3">
-                <Button variant="outline" onClick={() => onNavigate("preview")}>
-                  Explore patient preview
+                <Button variant="outline" onClick={() => onNavigate("journey")}>
+                  Explore the patient journey
                 </Button>
                 <Button
                   variant="outline"
@@ -569,7 +569,7 @@ export function GrowthModule({
               </CardContent>
             </Card>
           </TabsContent>
-          <TabsContent value="preview">
+          <TabsContent value="journey">
             <PatientPreview name={selected?.name || "Your clinic"} />
           </TabsContent>
           <TabsContent value="capabilities">
@@ -757,7 +757,7 @@ function PatientPreview({ name }: { name: string }) {
   return (
     <div className="space-y-6">
       <Alert>
-        <AlertTitle>Illustrative patient preview</AlertTitle>
+        <AlertTitle>Illustrative patient journey</AlertTitle>
         <AlertDescription>
           This is a concept, not a live Google listing. Google controls the
           final appearance and available buttons. All clicks below stay in this
@@ -918,7 +918,7 @@ function PatientPreview({ name }: { name: string }) {
                   <p className="font-medium">Example consultation · {time}</p>
                   <p className="text-sm text-muted-foreground">
                     Production verifies the contact and places a short backend
-                    hold before confirmation. This preview collects no patient
+                    hold before confirmation. This example collects no patient
                     information.
                   </p>
                   <Button onClick={() => setStep(2)}>
@@ -967,10 +967,10 @@ function PatientPreview({ name }: { name: string }) {
               </AlertTitle>
               <AlertDescription>
                 {journey === "Directions"
-                  ? "Production opens the verified clinic map pin. This preview does not invent a location."
+                  ? "Production opens the verified clinic map pin. This example does not invent a location."
                   : journey === "Call"
                     ? "Production opens the dialler with your approved clinic number. No call is placed here."
-                    : "Production opens your approved website. This preview stays local."}
+                    : "Production opens your approved website. This example stays local."}
               </AlertDescription>
             </Alert>
           )}

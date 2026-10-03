@@ -34,6 +34,7 @@ import {
   Resource,
   SectionTitle,
   StateBadge,
+  usePermissions,
   useResource,
 } from "@/components/workspace";
 import { UploadFile } from "@/modules/whatsapp";
@@ -66,7 +67,8 @@ export function Campaigns({
   user: StaffUser;
   config: Config;
 }) {
-  const r = useResource<Campaign[]>(wa + "/campaigns"),
+  const canManage = usePermissions().can("campaigns.manage"),
+    r = useResource<Campaign[]>(wa + "/campaigns"),
     templates = useResource<Template[]>(wa + "/templates"),
     catalogue = useResource<Catalogue>("/api/v1/admin/catalogue"),
     assets = useResource<Asset[]>(wa + "/campaign-assets"),
@@ -80,6 +82,7 @@ export function Campaigns({
         description="Build a draft, test on your phone, then approve the exact audience."
         action={
           <Button
+            disabled={!canManage}
             onClick={() => {
               setSelected(null);
               setOpen(true);
@@ -156,7 +159,7 @@ export function Campaigns({
       ) : (
         <Empty
           title="Your first campaign starts with a draft"
-          description="Choose an approved message, preview it and check a test on your phone. Saving a draft sends nothing."
+          description="Choose an approved message, review it and check a test on your phone. Saving a draft sends nothing."
         />
       )}
       <div className="mt-7">
@@ -394,7 +397,7 @@ function Composer({
         ))}
       </div>
       {loadError && (
-        <Notice title="Draft preview unavailable" text={loadError} />
+        <Notice title="Draft details unavailable" text={loadError} />
       )}
       <div className="grid md:grid-cols-[1.1fr_1fr] gap-7">
         <div className="space-y-5">
@@ -776,7 +779,7 @@ function Composer({
                   )
                 }
               >
-                Refresh audience preview
+                Refresh audience
               </Action>
               <div className="flex flex-wrap justify-between gap-3 pt-3">
                 <Button variant="outline" onClick={() => setStep(2)}>
@@ -814,7 +817,7 @@ function Composer({
         </div>
         <aside>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-medium">Patient message preview</h3>
+            <h3 className="text-xs font-medium">What the patient sees</h3>
             <Badge variant="outline">{template?.language ?? "—"}</Badge>
           </div>
           <div className="message-preview">
@@ -828,7 +831,7 @@ function Composer({
               {media && media.mime_type.startsWith("image/") ? (
                 <img
                   src={assetUrl(media.id)}
-                  alt="Campaign header preview"
+                  alt="Campaign header image"
                   className="w-full rounded-lg mb-3"
                 />
               ) : media ? (
@@ -860,8 +863,8 @@ function Composer({
             </div>
           </div>
           <p className="text-[11px] text-muted-foreground leading-relaxed mt-3">
-            Preview only. WhatsApp controls the final layout. Saving or viewing
-            this preview does not send a message.
+            Approximate layout; WhatsApp controls the final look. Saving or
+            viewing this draft does not send a message.
           </p>
           {readonly && (
             <p className="text-xs text-muted-foreground mt-4">

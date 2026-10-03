@@ -162,10 +162,9 @@ export function WebsiteActivity({ api, demo = false }: { api: GrowthApi; demo?: 
             funnel or a visitor-to-appointment conversion rate.
           </p>
           <p>
-            The current website marks every event as demo. “Booking preview
-            completed” means a local preview was reached; it does not mean the
-            backend created an appointment. Production activity stays separate
-            until real booking integration is wired.
+            “Sample booking walkthrough completed” counts the website’s example
+            flow, not saved appointments. Real bookings are counted from the
+            clinic’s own records on the Appointments page.
           </p>
         </div>
       </CardContent>

@@ -28,7 +28,7 @@ This document records why the interface works as it does. It distinguishes decis
 11. [Issues, ratings and attachments](#11-issues-ratings-and-attachments)
 12. [Doctor content](#12-doctor-content)
 13. [Campaign creation](#13-campaign-creation)
-14. [Preview, testing and approval](#14-preview-testing-and-approval)
+14. [Review, testing and approval](#14-review-testing-and-approval)
 15. [Follow-ups](#15-follow-ups)
 16. [Appointment management](#16-appointment-management)
 17. [Doctors and schedules](#17-doctors-and-schedules)
@@ -136,7 +136,7 @@ A module title does not become a promotional hero. Page headings are approximate
 
 The first administrator is created through an operator CLI after migrations. There is no built-in password, public registration endpoint or reusable production demo account. Administrators can create individual staff accounts in Settings. Operator recovery and disablement use `app.staff_cli`.
 
-**Local preview:** A generated local-only administrator exists in an isolated database. Its credentials are kept in a gitignored, permission-restricted local file. They are not deployment credentials.
+**Local development:** A generated local-only administrator exists in an isolated database. Its credentials are kept in a gitignored, permission-restricted local file. They are not deployment credentials.
 
 **Why:** Staff should perform a familiar sign-in task. Service credentials belong to infrastructure, and a claimed staff name should not replace authentication.
 
@@ -201,8 +201,8 @@ A campaign is a guided four-step sequence:
 
 | Step | Staff decision | Outcome |
 | --- | --- | --- |
-| Message | Select a supported approved template; fill fields and choose required media | Live visual preview, no send |
-| Audience & timing | Choose clinic/specialty filters, time, estimated rate and budget | Saved draft and audience preview, no send |
+| Message | Select a supported approved template; fill fields and choose required media | Live visual of the message, no send |
+| Audience & timing | Choose clinic/specialty filters, time, estimated rate and budget | Saved draft and audience count, no send |
 | Test | Choose a configured verified phone and explicitly request one test | Queued test; staff must observe receipt |
 | Review | Check recipient count, estimate, message, timing and identity | Explicit approval of the current audience |
 
@@ -210,9 +210,9 @@ Saving does not implicitly send a test or approve a campaign. Drafts are fixed a
 
 **Why:** The old long form exposed every field and action at once. Sequential steps reduce scanning and put consequences at the moment of decision.
 
-## 14. Preview, testing and approval
+## 14. Review, testing and approval
 
-The preview stays beside the composer on desktop and follows it on narrow screens. Template body fields update in place. The preview includes a static text header, approved image/PDF, footer and button labels when supported. It is explicitly illustrative; WhatsApp determines final rendering.
+The message view stays beside the composer on desktop and follows it on narrow screens. Template body fields update in place. It includes a static text header, approved image/PDF, footer and button labels when supported. It is explicitly illustrative; WhatsApp determines final rendering.
 
 A test is restricted to configured phones. Queue acceptance is not the receipt checkbox. The staff member must check the actual phone; the backend also requires evidence of a provider-accepted test before approving patients.
 
@@ -349,7 +349,7 @@ Verification is layered; passing one layer does not establish the next.
 | Packaging | API image serves the built workspace and coupled bot integration passes |
 | Provider / clinic | Actual Meta delivery, approved content, real availability and clinic staff acceptance |
 
-The checked-in tests and GitHub run are the reproducible source of numerical results. Local preview records and synthetic template inventory are development fixtures, not Meta approval or real patient evidence. Production provider delivery and clinical acceptance remain separate rollout checks.
+The checked-in tests and GitHub run are the reproducible source of numerical results. Local development records and synthetic template inventory are development fixtures, not Meta approval or real patient evidence. Production provider delivery and clinical acceptance remain separate rollout checks.
 
 ## 26. Trade-offs and next improvements
 
@@ -360,7 +360,7 @@ The checked-in tests and GitHub run are the reproducible source of numerical res
 | One deployment per clinic | Straightforward module ownership | No shared-database tenant isolation |
 | Named password accounts | Familiar, attributable staff actions | MFA/SSO and invitation/recovery delivery can follow |
 | List/table-oriented operations | Fast comparison and clear status | Large datasets will need server pagination and richer filters |
-| Patient outreach off in preview | Safe inspection of workflows | Real-phone proof still required |
+| Patient outreach off in local development | Safe inspection of workflows | Real-phone proof still required |
 | Explicit manual review of uncertain sends | Avoid duplicate patient communication | Staff need provider access and an escalation procedure |
 
 Next validation should involve a receptionist performing five representative tasks: find today's booking, check in a patient, upload a specialty PDF, answer a reception handoff and prepare a campaign. Measure time, errors and hesitation before adding more visual decoration or dashboard statistics.

@@ -135,16 +135,22 @@ async def save_upload(db: Session, file: UploadFile, kind: str) -> MediaAsset:
         raise DomainError("INVALID_MEDIA_SIZE", "The file is empty or too large.", 413)
     if settings.app_env == "production":
         await asyncio.to_thread(scan_bytes, data, settings.media_scan_socket)
-    if not _matches(mime, data, kind):
-        raise DomainError("INVALID_MEDIA_CONTENT", "The file content does not match its type.", 415)
     storage_name = uuid.uuid4().hex
-    path = media_path(storage_name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+
+    def check_and_store():
+        # Parsing and writing up to 20 MB would stall every other request on the event loop.
+        if not _matches(mime, data, kind):
+            raise DomainError("INVALID_MEDIA_CONTENT", "The file content does not match its type.", 415)
+        path = media_path(storage_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return hashlib.sha256(data).hexdigest()
+
+    sha256 = await asyncio.to_thread(check_and_store)
     filename = re.sub(r'[\x00-\x1f\x7f\\/\"]+', '_', file.filename or "upload")[-255:]
     asset = MediaAsset(kind=kind, original_name=filename,
                        mime_type=mime, storage_name=storage_name, size_bytes=len(data),
-                       sha256=hashlib.sha256(data).hexdigest())
+                       sha256=sha256)
     db.add(asset)
     return asset
 

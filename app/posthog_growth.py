@@ -19,7 +19,7 @@ EVENTS = {
     "page_viewed": "Page views",
     "booking_intent_clicked": "Booking intent",
     "booking_flow_started": "Booking flow started",
-    "booking_preview_completed": "Booking preview completed",
+    "booking_preview_completed": "Sample booking walkthrough completed",
     "booking_validation_failed": "Booking validation failures",
     "contact_intent_clicked": "Contact intent",
     "search_used": "Care searches",
@@ -72,7 +72,7 @@ def website_activity(start_date: date | None = None, end_date: date | None = Non
               "retrieved_at": None, "visitor_to_appointment_conversion": None,
               "limitations": ["Consented visitors only; visitors are anonymous distinct IDs, not patients.",
                               "Counts by event are not an ordered funnel or an appointment conversion rate.",
-                              "Frontend booking_preview_completed is a demo preview, not a persisted appointment.",
+                              "The sample booking walkthrough event is not a saved appointment; count bookings from clinic records.",
                               "The current frontend marks all events is_demo=true; production counts may be empty.",
                               "Website activity is global: current events do not provide branch attribution."]}
     if settings.demo_mode:

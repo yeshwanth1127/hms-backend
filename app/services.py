@@ -215,6 +215,9 @@ def confirm_appointment(db: Session, body: AppointmentCreate, *, commit: bool = 
 
 
 def cancel_appointment(db: Session, appointment: Appointment, actor_id: str, reason: str) -> Appointment:
+    # Re-read under the row lock staff status changes use, so a concurrent check-in is never overwritten.
+    appointment = db.scalar(select(Appointment).where(Appointment.id == appointment.id)
+                            .with_for_update(of=Appointment).execution_options(populate_existing=True))
     if appointment.status == "cancelled":
         return appointment
     if appointment.status not in {"confirmed"}:

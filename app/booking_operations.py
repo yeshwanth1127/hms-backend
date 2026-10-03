@@ -6,7 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from . import audit
 from .admin import require_admin, _appointment_row
+from .permissions import require_capability
 from .db import get_db
 from .models import (Appointment, AppointmentStatusHistory, BookingOperationAudit, Doctor,
                      Branch, OutboxEvent, ReminderJob, Reservation, RescheduleOperation, ScheduleException, utcnow)
@@ -67,11 +69,11 @@ def exception_preview(body: ExceptionInput, _=Depends(require_admin), db: Sessio
 
 
 @router.post('/schedule-exceptions', status_code=201)
-def exception_create(body: ExceptionInput, actor=Depends(require_admin), db: Session=Depends(get_db)):
+def exception_create(body: ExceptionInput, actor=Depends(require_capability('schedule.block')), db: Session=Depends(get_db)):
     db.scalar(select(Doctor).where(Doctor.id == body.doctor_id).with_for_update())
     items = affected(db, body)
     if set(body.acknowledged_appointments) != {item.id for item in items}:
-        raise DomainError('AFFECTED_BOOKINGS_CHANGED', 'Preview the affected bookings and acknowledge each one before blocking time.', 409)
+        raise DomainError('AFFECTED_BOOKINGS_CHANGED', 'Review the affected bookings and acknowledge each one before blocking time.', 409)
     item = ScheduleException(**body.model_dump(exclude={'acknowledged_appointments'}))
     db.add(item)
     db.flush()
@@ -79,6 +81,8 @@ def exception_create(body: ExceptionInput, actor=Depends(require_admin), db: Ses
     holds = db.scalars(select(Reservation).where(*exception_scope(body), Reservation.status == 'active')).all()
     for hold in holds:
         hold.status = 'released'
+    audit.note(targets={'exception_id': item.id, 'doctor_id': body.doctor_id},
+               blocked={'starts_at': body.starts_at, 'ends_at': body.ends_at}, affected_appointments=[a.id for a in items], released_holds=len(holds))
     db.add(BookingOperationAudit(actor=actor, action='schedule.blocked', record_id=item.id,
         change={'reason': body.reason, 'affected_appointments': [a.id for a in items], 'released_holds': len(holds)}))
     db.commit()
@@ -86,11 +90,12 @@ def exception_create(body: ExceptionInput, actor=Depends(require_admin), db: Ses
 
 
 @router.delete('/schedule-exceptions/{exception_id}', status_code=204)
-def exception_delete(exception_id: str, actor=Depends(require_admin), db: Session=Depends(get_db)):
+def exception_delete(exception_id: str, actor=Depends(require_capability('schedule.block')), db: Session=Depends(get_db)):
     item = db.get(ScheduleException, exception_id)
     if not item:
         raise DomainError('SCHEDULE_EXCEPTION_NOT_FOUND', 'Blocked time was not found.', 404)
     db.scalar(select(Doctor).where(Doctor.id == item.doctor_id).with_for_update())
+    audit.note(targets={'doctor_id': item.doctor_id}, unblocked={'starts_at': item.starts_at, 'ends_at': item.ends_at})
     db.add(BookingOperationAudit(actor=actor, action='schedule.unblocked', record_id=item.id, change={'reason': item.reason}))
     db.delete(item)
     db.commit()
@@ -116,6 +121,7 @@ def move_appointment(db, appointment_id, hold_id, owner, idempotency_key, actor,
     if (hold.doctor_id, hold.branch_id, hold.consultation_type) != (item.reservation.doctor_id, item.reservation.branch_id, item.reservation.consultation_type):
         raise DomainError('VISIT_CHANGE_REQUIRES_REBOOKING', 'Keep the same doctor, clinic and visit type, or cancel and book a new visit after reviewing its fee.', 422)
     validate_held_slot(db, hold)
+    audit.note(targets={'code': item.confirmation_code}, starts_at={'from': item.reservation.starts_at, 'to': hold.starts_at})
     item.reservation.status = 'released'
     hold.status, hold.expires_at = 'booked', None
     item.reservation_id, item.reservation = hold.id, hold
@@ -162,7 +168,10 @@ def staff_move(appointment_id: str, body: StaffMove, actor=Depends(require_admin
     hold = create_hold(db, HoldCreate(doctor_id=old.doctor_id, branch_id=old.branch_id, consultation_type=old.consultation_type,
         starts_at=body.starts_at, ends_at=body.ends_at, owner_key=old.owner_key, idempotency_key=operation_key), commit=False)
     moved = move_appointment(db, item.id, hold.id, old.owner_key, operation_key, actor, body.reason)
-    return {**_appointment_row(db, moved), 'notification_state': 'outbox_pending_not_delivered'}
+    from .whatsapp_outreach import notify_change
+    notification = notify_change(db, moved, 'rescheduled')
+    db.commit()
+    return {**_appointment_row(db, moved), **notification}
 
 
 @router.get('/booking-operations/audit')

@@ -14,7 +14,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .staff_auth import staff_label
+from . import audit
 from .admin import require_admin
+from .permissions import require_capability
 from .client_modules import require_whatsapp_module
 from .config import settings
 from .db import get_db
@@ -306,6 +308,7 @@ def reception_assign(sender_id: str, body: StaffHandoff, request: Request, _: st
     handoff = db.get(WhatsAppHandoff, sender_id)
     if not handoff:
         raise DomainError("HANDOFF_NOT_FOUND", "Reception conversation was not found.", 404)
+    audit.note(status={"from": handoff.status, "to": body.status}, assigned_to=body.assigned_to)
     handoff.status, handoff.assigned_to, handoff.updated_at = body.status, body.assigned_to, utcnow()
     case = db.get(SupportCase, handoff.case_id)
     case.status = "resolved" if body.status == "closed" else "in_progress"
@@ -340,10 +343,11 @@ def reception_reply(sender_id: str, body: StaffReply, request: Request, _: str =
 
 
 @admin_router.patch("/branches/{branch_id}")
-def branch_details(branch_id: str, body: BranchDetails, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def branch_details(branch_id: str, body: BranchDetails, _: str = Depends(require_capability("clinic.manage")), db: Session = Depends(get_db)):
     branch = db.get(Branch, branch_id)
     if not branch:
         raise DomainError("BRANCH_NOT_FOUND", "Clinic was not found.", 404)
+    audit.note(**audit.diff({key: getattr(branch, key) for key in body.model_dump()}, body.model_dump()))
     for key, value in body.model_dump().items():
         setattr(branch, key, value)
     db.commit()
@@ -483,7 +487,7 @@ def audience_contacts(db, campaign):
     query = query.where(WhatsAppContact.language == template.language.split("_")[0])
     items = db.scalars(query.limit(10001)).all()
     if len(items) > 10000:
-        raise DomainError("AUDIENCE_TOO_LARGE", "Narrow the audience before previewing.", 422)
+        raise DomainError("AUDIENCE_TOO_LARGE", "Narrow the audience before reviewing it.", 422)
     items = [c for c in items if c.language == template.language.split("_")[0]
              and (not campaign.audience.get("interest") or (not c.interests or campaign.audience["interest"] in c.interests))]
     if len(items) > 1000:
@@ -510,7 +514,7 @@ def campaigns(_: str = Depends(require_admin), db: Session = Depends(get_db)):
 
 
 @admin_router.post("/campaigns", status_code=201)
-def campaign_create(body: CampaignCreate, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def campaign_create(body: CampaignCreate, _: str = Depends(require_capability("campaigns.manage")), db: Session = Depends(get_db)):
     template = approved_template(db, body.template_id)
     if template.category != "MARKETING":
         raise DomainError("MARKETING_TEMPLATE_REQUIRED", "Campaigns must use a Meta-approved marketing template.", 422)
@@ -538,7 +542,7 @@ def campaign_preview(campaign_id: str, _: str = Depends(require_admin), db: Sess
 
 
 @admin_router.post("/campaigns/{campaign_id}/test", status_code=202)
-def campaign_test(campaign_id: str, body: CampaignTest, request: Request, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def campaign_test(campaign_id: str, body: CampaignTest, request: Request, _: str = Depends(require_capability("campaigns.manage")), db: Session = Depends(get_db)):
     if getattr(request.state, "staff_user", None):
         user = request.state.staff_user
         body.actor = staff_label(user)
@@ -559,7 +563,7 @@ def campaign_test(campaign_id: str, body: CampaignTest, request: Request, _: str
 
 
 @admin_router.post("/campaigns/{campaign_id}/approve")
-def campaign_approve(campaign_id: str, body: CampaignApproval, request: Request, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def campaign_approve(campaign_id: str, body: CampaignApproval, request: Request, _: str = Depends(require_capability("campaigns.manage")), db: Session = Depends(get_db)):
     if getattr(request.state, "staff_user", None):
         user = request.state.staff_user
         body.actor = staff_label(user)
@@ -572,7 +576,7 @@ def campaign_approve(campaign_id: str, body: CampaignApproval, request: Request,
         raise DomainError("TEST_REQUIRED", "Send the test and confirm that it arrived before approval.", 409)
     preview = preview_row(db, campaign)
     if preview["recipients"] != body.expected_count or preview["audience_hash"] != body.audience_hash:
-        raise DomainError("AUDIENCE_CHANGED", "Audience changed. Refresh the preview before approval.", 409)
+        raise DomainError("AUDIENCE_CHANGED", "Audience changed. Refresh the audience before approval.", 409)
     if not preview["within_budget"]:
         raise DomainError("BUDGET_EXCEEDED", "Estimated campaign cost exceeds the spending cap.", 422)
     people = audience_contacts(db, campaign)
@@ -581,13 +585,14 @@ def campaign_approve(campaign_id: str, body: CampaignApproval, request: Request,
                                campaign_id=campaign.id, template_id=campaign.template_id,
                                template_fingerprint=campaign.template_fingerprint, parameters=campaign.parameters,
                                asset_id=campaign.asset_id, purpose="campaign", due_at=campaign.scheduled_at, approved_actor=body.actor))
+    audit.note(status={"from": "draft", "to": "scheduled"}, recipients=len(people))
     campaign.status, campaign.approved_by, campaign.approved_count = "scheduled", body.actor, len(people)
     db.commit()
     return campaign_row(db, campaign)
 
 
 @admin_router.post("/campaigns/{campaign_id}/pause")
-def campaign_pause(campaign_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+def campaign_pause(campaign_id: str, _: str = Depends(require_capability("campaigns.manage")), db: Session = Depends(get_db)):
     campaign = db.get(WhatsAppCampaign, campaign_id)
     if not campaign:
         raise DomainError("CAMPAIGN_NOT_FOUND", "Campaign was not found.", 404)
@@ -599,29 +604,47 @@ def campaign_pause(campaign_id: str, _: str = Depends(require_admin), db: Sessio
     return {"paused": True}
 
 
+CHANGE_KINDS = ("rescheduled", "cancelled")
+
+
 def queue_followup(db, appointment, kind, due_at=None):
-    if appointment.origin_channel != "whatsapp" or not appointment.consent_to_reminders:
-        return
+    """Queue one care message; returns None when queued (or already queued), else why the patient needs a call."""
+    # Website phones are verified through WhatsApp, but their consent covers visit updates only.
+    channels = ("whatsapp", "web") if kind in CHANGE_KINDS else ("whatsapp",)
+    if appointment.origin_channel not in channels:
+        return "booked outside WhatsApp"
+    if not appointment.consent_to_reminders:
+        return "no WhatsApp consent"
     rule = db.get(WhatsAppFollowupRule, kind)
     if not rule or not rule.enabled:
-        return
+        return "WhatsApp message not set up"
     sender = appointment.patient_phone.lstrip("+")
     contact = ensure_contact(db, sender)
     if not contact.service_messages or contact.stopped_all:
-        return
+        return "patient stopped WhatsApp messages"
     try:
         template = approved_template(db, rule.template_id, rule.template_fingerprint)
     except DomainError:
-        return False
-    dedupe = f"care:{kind}:{appointment.id}"
+        return "WhatsApp template no longer approved"
+    # One message per change: each reschedule lands on a new reservation.
+    dedupe = f"care:{kind}:{appointment.id}" + (f":{appointment.reservation_id}" if kind == "rescheduled" else "")
     if db.scalar(select(WhatsAppOutbound.id).where(WhatsAppOutbound.dedupe_key == dedupe)):
-        return
+        return None
     doctor, branch = db.get(Doctor, appointment.reservation.doctor_id), db.get(Branch, appointment.reservation.branch_id)
     when = utc(appointment.reservation.starts_at).astimezone(ZoneInfo(branch.timezone)).strftime("%d %b %Y, %I:%M %p")
     db.add(WhatsAppOutbound(dedupe_key=dedupe, sender_id=sender, appointment_id=appointment.id,
                            template_id=template.id, template_fingerprint=template.fingerprint,
                            parameters=[appointment.confirmation_code, doctor.name, when], purpose=kind,
                            due_at=due_at or utcnow() + timedelta(hours=rule.delay_hours)))
+    return None
+
+
+def notify_change(db, appointment, kind):
+    """Tell the patient about a staff change now, or tell staff to call them."""
+    reason = queue_followup(db, appointment, kind, utcnow())
+    state = {"notification_state": "whatsapp_queued"} if reason is None else {"notification_state": "call_patient", "notification_reason": reason}
+    audit.note(notification=state)
+    return state
 
 
 @admin_router.get("/followup-rules")
@@ -631,11 +654,12 @@ def followup_rules(_: str = Depends(require_admin), db: Session = Depends(get_db
 
 
 @admin_router.put("/followup-rules/{kind}")
-def followup_rule(kind: str, body: RuleChange, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    if kind not in ("feedback", "no_show", "followup"):
-        raise DomainError("INVALID_RULE", "Choose feedback, no_show or followup.", 422)
+def followup_rule(kind: str, body: RuleChange, _: str = Depends(require_capability("followups.manage")), db: Session = Depends(get_db)):
+    if kind not in ("feedback", "no_show", "followup", *CHANGE_KINDS):
+        raise DomainError("INVALID_RULE", "Choose feedback, no_show, followup, rescheduled or cancelled.", 422)
     existing = db.get(WhatsAppFollowupRule, kind)
     if existing and not body.enabled and body.template_id == existing.template_id:
+        audit.note(enabled={"from": existing.enabled, "to": False})
         existing.enabled = False
         db.commit()
         return {"saved": True}
@@ -647,6 +671,8 @@ def followup_rule(kind: str, body: RuleChange, _: str = Depends(require_admin), 
     if not item:
         item = WhatsAppFollowupRule(kind=kind)
         db.add(item)
+    audit.note(**audit.diff({"template_id": item.template_id, "delay_hours": item.delay_hours, "enabled": item.enabled},
+                            {"template_id": template.id, "delay_hours": body.delay_hours, "enabled": body.enabled}))
     item.template_id, item.template_fingerprint = template.id, template.fingerprint
     item.delay_hours, item.enabled = body.delay_hours, body.enabled
     db.commit()
@@ -700,7 +726,9 @@ def job_allowed(db, job, contact):
                     (not campaign.audience.get("branch_id") or contact.branch_id == campaign.audience["branch_id"]) and
                     (not campaign.audience.get("interest") or (not contact.interests or campaign.audience["interest"] in contact.interests)))
     item = db.get(Appointment, job.appointment_id)
-    expected = "no_show" if job.purpose == "no_show" else "completed"
+    expected = {"no_show": "no_show", "rescheduled": "confirmed", "cancelled": "cancelled"}.get(job.purpose, "completed")
+    if job.purpose == "rescheduled" and item and not job.dedupe_key.endswith(f":{item.reservation_id}"):
+        return False  # moved again since; the newer message carries the current time
     rule = db.get(WhatsAppFollowupRule, job.purpose)
     if not rule or not rule.enabled or rule.template_id != job.template_id or rule.template_fingerprint != job.template_fingerprint:
         return False
@@ -911,7 +939,7 @@ def authorize_reminder(job_id: str, _: None = Depends(require_whatsapp_service),
 
 
 @admin_router.post("/campaign-assets", status_code=201)
-async def campaign_upload(file: UploadFile = File(), _: str = Depends(require_admin), db: Session = Depends(get_db)):
+async def campaign_upload(file: UploadFile = File(), _: str = Depends(require_capability("campaigns.manage")), db: Session = Depends(get_db)):
     asset = await save_upload(db, file, "campaign")
     db.commit()
     return asset_row(asset)

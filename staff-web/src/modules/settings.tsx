@@ -2,7 +2,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useState } from "react";
 import { Plus } from "lucide-react";
-import { api, type StaffUser } from "@/lib/api";
+import { api, dateTime, type StaffUser } from "@/lib/api";
 import {
   Action,
   Choice,
@@ -10,8 +10,11 @@ import {
   PageTitle,
   Resource,
   SectionTitle,
+  usePermissions,
   useResource,
 } from "@/components/workspace";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -63,6 +66,7 @@ export function SettingsModule({
       <ModuleSettings api={api} onChanged={onModulesChanged ?? (() => {})} />
     );
   if (page === "design") return <DesignBook />;
+  if (page === "activity") return <ActivityLog />;
 
   return (
     <>
@@ -105,6 +109,7 @@ export function SettingsModule({
           </CardContent>
         </Card>
       </div>
+      {user.role === "admin" && <StaffPermissions />}
       {user.role === "admin" && (
         <>
           <SectionTitle
@@ -328,5 +333,226 @@ function DesignBook() {
         </CardContent>
       </Card>
     </Resource>
+  );
+}
+
+function StaffPermissions() {
+  const permissions = usePermissions();
+  return (
+    <Card className="mb-7">
+      <CardHeader>
+        <CardTitle className="text-base">
+          What clinic staff can change
+        </CardTitle>
+        <CardDescription>
+          Administrators can always change everything. Consultation fees are
+          administrator-only. Every change is recorded in the activity log.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Resource {...permissions}>
+          {permissions.data?.staff.map((p) => (
+            <div
+              key={p.key}
+              className="flex items-center justify-between gap-4"
+            >
+              <Label htmlFor={"perm-" + p.key} className="text-sm font-normal">
+                {p.label}
+              </Label>
+              <Switch
+                id={"perm-" + p.key}
+                checked={p.allowed}
+                onCheckedChange={async (allowed) => {
+                  try {
+                    await api(`/api/v1/staff/permissions/${p.key}`, {
+                      method: "PUT",
+                      body: { allowed },
+                    });
+                  } finally {
+                    permissions.refresh();
+                  }
+                }}
+              />
+            </div>
+          ))}
+        </Resource>
+      </CardContent>
+    </Card>
+  );
+}
+
+type AuditItem = {
+  id: string;
+  created_at: string;
+  actor: string;
+  actor_type: string;
+  action: string;
+  targets: Record<string, string>;
+  change: Record<string, unknown>;
+  status_code: number;
+  outcome: "success" | "rejected";
+  request_id: string;
+};
+const describe = (value: unknown) =>
+  value && typeof value === "object" && "from" in value && "to" in value
+    ? `${String((value as { from: unknown }).from)} → ${String((value as { to: unknown }).to)}`
+    : typeof value === "object"
+      ? JSON.stringify(value)
+      : String(value);
+
+function ActivityLog() {
+  const [filters, setFilters] = useState({
+      actor: "",
+      target: "",
+      action: "",
+      outcome: "",
+      start: "",
+      end: "",
+    }),
+    [limit, setLimit] = useState(50);
+  const query = new URLSearchParams(
+    Object.entries(filters).filter(([, v]) => v),
+  ).toString();
+  const log = useResource<{ items: AuditItem[]; more: boolean }>(
+    `/api/v1/staff/audit?${query}&limit=${limit}`,
+  );
+  const set = (key: keyof typeof filters) => (v: string) => {
+    setFilters({ ...filters, [key]: v });
+    setLimit(50);
+  };
+  return (
+    <>
+      <PageTitle
+        title="Activity log"
+        description="Every change made in the clinic system: who, what, which record, and whether it worked."
+        action={
+          <Button
+            variant="outline"
+            render={<a href={`/api/v1/staff/audit.csv?${query}`} download />}
+          >
+            Export CSV
+          </Button>
+        }
+      />
+      <Card className="mb-5">
+        <CardContent className="grid sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-6">
+          <Field label="Person" id="audit-actor">
+            <Input
+              id="audit-actor"
+              value={filters.actor}
+              onChange={(e) => set("actor")(e.target.value)}
+            />
+          </Field>
+          <Field label="Record (code or id)" id="audit-target">
+            <Input
+              id="audit-target"
+              value={filters.target}
+              onChange={(e) => set("target")(e.target.value)}
+            />
+          </Field>
+          <Field label="Action contains" id="audit-action">
+            <Input
+              id="audit-action"
+              value={filters.action}
+              onChange={(e) => set("action")(e.target.value)}
+            />
+          </Field>
+          <Choice
+            label="Outcome"
+            value={filters.outcome}
+            onChange={set("outcome")}
+            options={[
+              ["", "All"],
+              ["success", "Succeeded"],
+              ["rejected", "Rejected or failed"],
+            ]}
+          />
+          <Field label="From" id="audit-start">
+            <Input
+              id="audit-start"
+              type="date"
+              value={filters.start}
+              onChange={(e) => set("start")(e.target.value)}
+            />
+          </Field>
+          <Field label="To" id="audit-end">
+            <Input
+              id="audit-end"
+              type="date"
+              value={filters.end}
+              onChange={(e) => set("end")(e.target.value)}
+            />
+          </Field>
+        </CardContent>
+      </Card>
+      <Resource {...log}>
+        <Card className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Time</TableHead>
+                <TableHead>Person</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Records</TableHead>
+                <TableHead>Change</TableHead>
+                <TableHead>Result</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {log.data?.items.map((e) => (
+                <TableRow key={e.id}>
+                  <TableCell className="whitespace-nowrap">
+                    {dateTime(e.created_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-normal">{e.actor}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {e.action}
+                  </TableCell>
+                  <TableCell className="whitespace-normal text-xs">
+                    {Object.entries(e.targets)
+                      .map(([k, v]) => `${k}: ${v}`)
+                      .join(", ")}
+                  </TableCell>
+                  <TableCell className="whitespace-normal text-xs">
+                    {Object.entries(e.change)
+                      .map(([k, v]) => `${k}: ${describe(v)}`)
+                      .join("; ")}
+                  </TableCell>
+                  <TableCell>
+                    <span
+                      className={
+                        e.outcome === "success"
+                          ? ""
+                          : "text-destructive font-medium"
+                      }
+                    >
+                      {e.status_code}{" "}
+                      {e.outcome === "success" ? "OK" : "Rejected"}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          {!log.data?.items.length && (
+            <p className="p-6 text-sm text-muted-foreground">
+              No matching activity.
+            </p>
+          )}
+        </Card>
+        {log.data?.more && (
+          <Button
+            variant="outline"
+            className="mt-4"
+            onClick={() => setLimit(Math.min(limit + 50, 200))}
+            disabled={limit >= 200}
+          >
+            {limit >= 200
+              ? "Narrow the filters or export CSV for more"
+              : "Show more"}
+          </Button>
+        )}
+      </Resource>
+    </>
   );
 }

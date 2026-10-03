@@ -6,6 +6,8 @@ _database_dir = tempfile.TemporaryDirectory(prefix="hms-tests-")
 DB_PATH = Path(_database_dir.name) / "test.db"
 os.environ["APP_ENV"] = "test"
 os.environ["DATABASE_URL"] = f"sqlite:///{DB_PATH}"
+# Every test request shares one client address; limits are covered in test_limits.py.
+os.environ["RATE_LIMITS_ENABLED"] = "false"
 # Tests use these fixture credentials. A copied deployment .env must not alter
 # service authentication before app.config constructs its cached settings.
 os.environ["ADMIN_API_KEY"] = "dev-admin-key"
