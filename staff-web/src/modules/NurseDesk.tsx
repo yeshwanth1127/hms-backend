@@ -192,7 +192,7 @@ export function NurseDesk({
     // Several nurses edit the same day; keep the list current while it is on screen.
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible" && !saving) void load(true);
-    }, 30_000);
+    }, 3_000);
     return () => window.clearInterval(timer);
   }, [load, saving]);
   const change = (setter: (v: string) => void, value: string) => {
