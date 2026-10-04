@@ -35,17 +35,19 @@ def expire_holds(db: Session, now: datetime | None = None) -> None:
     now = now or utcnow()
     db.execute(update(Reservation).where(
         Reservation.status == "active", Reservation.expires_at <= now
-    ).values(status="expired").execution_options(synchronize_session="fetch"))
+    ).values(status="expired"))
+    db.commit()
 
 
 def availability(db: Session, doctor_id: str, branch_id: str, start_date: date, end_date: date,
-                 consultation_type: str = "in_person", *, exclude_reservation_id: str | None = None,
-                 commit: bool = True) -> tuple[list[AvailabilitySlot], str]:
+                 consultation_type: str = "in_person") -> tuple[list[AvailabilitySlot], str]:
     if end_date < start_date or (end_date - start_date).days > 31:
         raise DomainError("INVALID_DATE_RANGE", "Choose a date range of 31 days or less.", 422)
     doctor = db.get(Doctor, doctor_id)
     branch = db.get(Branch, branch_id)
     if not doctor or not doctor.is_active or not branch or not branch.is_active:
+        raise DomainError("CATALOGUE_ITEM_NOT_FOUND", "Doctor or branch was not found.", 404)
+    if doctor.hospital_id and branch.hospital_id and doctor.hospital_id != branch.hospital_id:
         raise DomainError("CATALOGUE_ITEM_NOT_FOUND", "Doctor or branch was not found.", 404)
     now = utcnow()
     expire_holds(db, now)
@@ -62,13 +64,10 @@ def availability(db: Session, doctor_id: str, branch_id: str, start_date: date, 
         ScheduleException.starts_at < range_end, ScheduleException.ends_at > range_start,
         or_(ScheduleException.branch_id.is_(None), ScheduleException.branch_id == branch_id),
     )).all()
-    busy_query = select(Reservation).where(
+    busy = db.scalars(select(Reservation).where(
         Reservation.doctor_id == doctor_id, Reservation.status.in_(["active", "booked"]),
         Reservation.starts_at < range_end, Reservation.ends_at > range_start,
-    )
-    if exclude_reservation_id:
-        busy_query = busy_query.where(Reservation.id != exclude_reservation_id)
-    busy = db.scalars(busy_query).all()
+    )).all()
     zone = ZoneInfo(branch.timezone)
     slots: list[AvailabilitySlot] = []
     cursor = start_date
@@ -91,82 +90,51 @@ def availability(db: Session, doctor_id: str, branch_id: str, start_date: date, 
                                                   starts_at=slot_start, ends_at=slot_end))
                 slot_start = slot_end
         cursor += timedelta(days=1)
-    if commit:
-        db.commit()
-    unique = {(item.starts_at, item.ends_at): item for item in slots}
-    return sorted(unique.values(), key=lambda item: item.starts_at), branch.timezone
+    db.commit()
+    return sorted(slots, key=lambda item: item.starts_at), branch.timezone
 
 
-def create_hold(db: Session, body: HoldCreate, *, commit: bool = True) -> Reservation:
+def create_hold(db: Session, body: HoldCreate) -> Reservation:
     existing = db.scalar(select(Reservation).where(Reservation.idempotency_key == body.idempotency_key))
     if existing:
-        if (existing.owner_key != body.owner_key or existing.doctor_id != body.doctor_id
-                or existing.branch_id != body.branch_id or existing.consultation_type != body.consultation_type
-                or _db_utc(existing.starts_at) != _aware_utc(body.starts_at)
-                or _db_utc(existing.ends_at) != _aware_utc(body.ends_at)):
-            raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
         return existing
-    # Serialize every channel's slot allocation per doctor, including overlapping rules.
-    db.scalar(select(Doctor).where(Doctor.id == body.doctor_id).with_for_update())
-    if db.scalar(select(Reservation).where(Reservation.idempotency_key == body.idempotency_key)):
-        return create_hold(db, body, commit=commit)
     starts_at, ends_at = _aware_utc(body.starts_at), _aware_utc(body.ends_at)
     if starts_at <= utcnow() or ends_at <= starts_at:
         raise DomainError("INVALID_SLOT", "The selected slot must be in the future.", 422)
-    candidates, _ = availability(db, body.doctor_id, body.branch_id, (starts_at - timedelta(days=1)).date(), (ends_at + timedelta(days=1)).date(), body.consultation_type, commit=False)
+    candidates, _ = availability(db, body.doctor_id, body.branch_id, starts_at.date(), ends_at.date(), body.consultation_type)
     if not any(item.starts_at == starts_at and item.ends_at == ends_at for item in candidates):
         raise DomainError("SLOT_NO_LONGER_AVAILABLE", "That appointment time is no longer available.", 409)
-    hold = Reservation(doctor_id=body.doctor_id, branch_id=body.branch_id,
+    doctor = db.get(Doctor, body.doctor_id)
+    hold = Reservation(hospital_id=doctor.hospital_id if doctor else None,
+                       doctor_id=body.doctor_id, branch_id=body.branch_id,
                        consultation_type=body.consultation_type, starts_at=starts_at, ends_at=ends_at,
                        owner_key=body.owner_key, expires_at=utcnow() + timedelta(minutes=settings.slot_hold_minutes),
                        idempotency_key=body.idempotency_key, status="active")
     db.add(hold)
     try:
-        if commit:
-            db.commit()
-        else:
-            db.flush()
+        db.commit()
     except IntegrityError as exc:
         db.rollback()
         replay = db.scalar(select(Reservation).where(Reservation.idempotency_key == body.idempotency_key))
         if replay:
-            return create_hold(db, body, commit=commit)
+            return replay
         raise DomainError("SLOT_NO_LONGER_AVAILABLE", "That appointment time is no longer available.", 409) from exc
     db.refresh(hold)
     return hold
 
 
-def validate_booking_replay(item: Appointment, body: AppointmentCreate) -> Appointment:
-    if (item.reservation_id != body.hold_id or item.reservation.owner_key != body.owner_key
-            or item.patient_phone != body.patient_phone.strip() or item.patient_name != body.patient_name.strip()):
-        raise DomainError("IDEMPOTENCY_CONFLICT", "This operation key was already used.", 409)
-    return item
-
-
-def validate_held_slot(db: Session, hold: Reservation) -> None:
-    starts, ends = _db_utc(hold.starts_at), _db_utc(hold.ends_at)
-    candidates, _ = availability(db, hold.doctor_id, hold.branch_id,
-        (starts - timedelta(days=1)).date(), (ends + timedelta(days=1)).date(), hold.consultation_type,
-        exclude_reservation_id=hold.id, commit=False)
-    if not any(slot.starts_at == starts and slot.ends_at == ends for slot in candidates):
-        raise DomainError("SLOT_NO_LONGER_AVAILABLE", "That appointment time is no longer available. Choose a new time.", 409)
-
-
-def confirm_appointment(db: Session, body: AppointmentCreate, *, commit: bool = True) -> Appointment:
+def confirm_appointment(db: Session, body: AppointmentCreate) -> Appointment:
     existing = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
     if existing:
-        return validate_booking_replay(existing, body)
-    # Use the same doctor lock as allocation and schedule changes.
-    candidate = db.get(Reservation, body.hold_id)
-    if candidate:
-        db.scalar(select(Doctor).where(Doctor.id == candidate.doctor_id).with_for_update())
+        from .models import Patient
+        replay_patient = db.get(Patient, existing.patient_id) if existing.patient_id else None
+        existing.patient_code = replay_patient.patient_code if replay_patient else None
+        existing.patient_access_code = None
+        existing.patient_account_created = False
+        return existing
     hold = db.scalar(select(Reservation).where(Reservation.id == body.hold_id).with_for_update())
     if not hold or hold.owner_key != body.owner_key:
         raise DomainError("HOLD_NOT_FOUND", "The slot hold was not found.", 404)
-    # A concurrent request may have committed while we waited for the hold.
-    existing = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
-    if existing:
-        return validate_booking_replay(existing, body)
     now = utcnow()
     expires_at = hold.expires_at
     if expires_at and expires_at.tzinfo is None:
@@ -176,19 +144,61 @@ def confirm_appointment(db: Session, body: AppointmentCreate, *, commit: bool = 
             hold.status = "expired"
             db.commit()
         raise DomainError("HOLD_EXPIRED", "The slot hold has expired. Please select a new time.", 409)
-    validate_held_slot(db, hold)
+    from .auth import hash_password
+    from .models import Hospital, HospitalMembership, Patient, User
+    hospital = db.get(Hospital, hold.hospital_id) if hold.hospital_id else None
+    patient = None
+    access_code = None
+    account_created = False
+    if hospital:
+        if body.patient_email:
+            patient = db.scalar(select(Patient).where(Patient.hospital_id == hospital.id,
+                                                       Patient.email == str(body.patient_email).lower()))
+        if not patient:
+            patient = db.scalar(select(Patient).where(Patient.hospital_id == hospital.id,
+                                                       Patient.phone == body.patient_phone.strip()))
+        if not patient:
+            patient = Patient(hospital_id=hospital.id, name=body.patient_name.strip(),
+                              phone=body.patient_phone.strip(),
+                              email=str(body.patient_email).lower() if body.patient_email else None)
+            db.add(patient)
+            db.flush()
+        if patient.user_id:
+            user = db.get(User, patient.user_id)
+        else:
+            login_email = patient.email or f"{patient.patient_code.lower()}@patient.exora.local"
+            user = db.scalar(select(User).where(User.email == login_email))
+            if user is None:
+                access_code = str(secrets.randbelow(90000000) + 10000000)
+                user = User(email=login_email, display_name=patient.name,
+                            password_hash=hash_password(access_code))
+                db.add(user)
+                db.flush()
+                patient.access_code_hash = hash_password(access_code)
+                account_created = True
+            patient.user_id = user.id
+        if user:
+            membership = db.scalar(select(HospitalMembership).where(
+                HospitalMembership.hospital_id == hospital.id,
+                HospitalMembership.user_id == user.id,
+                HospitalMembership.role == "patient",
+            ))
+            if membership is None:
+                db.add(HospitalMembership(hospital_id=hospital.id, user_id=user.id, role="patient"))
     appointment = Appointment(
-        confirmation_code=f"AVO-{secrets.token_hex(8).upper()}", reservation_id=hold.id,
-        consultation_fee=db.get(Doctor, hold.doctor_id).consultation_fee,
+        confirmation_code=f"AVO-{secrets.token_hex(4).upper()}", reservation_id=hold.id,
+        hospital_id=hospital.id if hospital else None, patient_id=patient.id if patient else None,
         patient_name=body.patient_name.strip(), patient_phone=body.patient_phone.strip(),
         patient_email=str(body.patient_email) if body.patient_email else None,
         reason=body.reason.strip() if body.reason else None, origin_channel=body.origin_channel,
-        acquisition_source=body.acquisition_source, is_demo=settings.app_env != "production",
         consent_to_reminders=body.consent_to_reminders,
         idempotency_key=body.idempotency_key, status="confirmed",
     )
     db.add(appointment)
     db.flush()
+    if hold.consultation_type == "virtual":
+        from .teleconsultation_service import ensure_for_appointment
+        ensure_for_appointment(db, appointment)
     hold.status = "booked"
     hold.expires_at = None
     db.add(AppointmentStatusHistory(appointment_id=appointment.id, from_status=None, to_status="confirmed",
@@ -200,24 +210,21 @@ def confirm_appointment(db: Session, body: AppointmentCreate, *, commit: bool = 
         db.add(ReminderJob(appointment_id=appointment.id, sender_id=body.patient_phone.lstrip("+"),
                            due_at=due_at, status="pending", attempts=0))
     try:
-        if commit:
-            db.commit()
-        else:
-            db.flush()
+        db.commit()
     except IntegrityError as exc:
         db.rollback()
         replay = db.scalar(select(Appointment).where(Appointment.idempotency_key == body.idempotency_key))
         if replay:
-            return validate_booking_replay(replay, body)
+            return replay
         raise DomainError("APPOINTMENT_CONFLICT", "The appointment could not be confirmed.", 409) from exc
     db.refresh(appointment)
+    appointment.patient_code = patient.patient_code if patient else None
+    appointment.patient_access_code = access_code
+    appointment.patient_account_created = account_created
     return appointment
 
 
 def cancel_appointment(db: Session, appointment: Appointment, actor_id: str, reason: str) -> Appointment:
-    # Re-read under the row lock staff status changes use, so a concurrent check-in is never overwritten.
-    appointment = db.scalar(select(Appointment).where(Appointment.id == appointment.id)
-                            .with_for_update(of=Appointment).execution_options(populate_existing=True))
     if appointment.status == "cancelled":
         return appointment
     if appointment.status not in {"confirmed"}:

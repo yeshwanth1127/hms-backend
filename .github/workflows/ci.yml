@@ -1,0 +1,26 @@
+name: backend-ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -e '.[dev]'
+      - run: pytest
+        env:
+          PYTHONPATH: .
+      - name: Verify one migration head and clean upgrade
+        run: |
+          test "$(alembic heads | wc -l | tr -d ' ')" = "1"
+          rm -f /tmp/exora-ci.db
+          DATABASE_URL=sqlite:////tmp/exora-ci.db alembic upgrade head
+      - run: docker build -t exora-hospital-backend:ci .

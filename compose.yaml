@@ -8,36 +8,24 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://avocado:avocado@postgres:5432/avocado
       REDIS_URL: redis://redis:6379/0
-      WEB_BOOKING_ENABLED: ${WEB_BOOKING_ENABLED:-false}
-      WEB_BOOKING_ORIGIN: ${WEB_BOOKING_ORIGIN:-}
-      WHATSAPP_BOOKING_NUMBER: ${WHATSAPP_BOOKING_NUMBER:-}
-      STAFF_ORIGIN: ${STAFF_ORIGIN:-}
-      BOOKING_ALLOWED_ORIGINS: ${BOOKING_ALLOWED_ORIGINS:-}
-      ALLOWED_ORIGINS: http://localhost:5567
+      ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:5567,http://127.0.0.1:5567
       ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
-      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
-      SARVAM_ORG_ID: ${SARVAM_ORG_ID:-}
-      SARVAM_WORKSPACE_ID: ${SARVAM_WORKSPACE_ID:-}
-      SARVAM_APP_ID: ${SARVAM_APP_ID:-}
-      SARVAM_APP_VERSION: ${SARVAM_APP_VERSION:-}
-      VOICE_WEBSITE_BOOKING_URL: ${VOICE_WEBSITE_BOOKING_URL:-/schedule-appointment}
-      SARVAM_AGENT_DISPLAY_NAME: ${SARVAM_AGENT_DISPLAY_NAME:-Aanya}
-      SARVAM_RECORDING_URL_FIELD: ${SARVAM_RECORDING_URL_FIELD:-}
-      VOICE_RECORDING_HOSTS: ${VOICE_RECORDING_HOSTS:-}
-      VOICE_RECORDING_ACCESS_DAYS: ${VOICE_RECORDING_ACCESS_DAYS:-30}
-      VOICE_CALLS_PER_IP_HOUR: ${VOICE_CALLS_PER_IP_HOUR:-5}
-      VOICE_CALLS_PER_DAY: ${VOICE_CALLS_PER_DAY:-200}
-      VOICE_MAX_CONCURRENT: ${VOICE_MAX_CONCURRENT:-10}
-      VOICE_SESSION_MINUTES: ${VOICE_SESSION_MINUTES:-20}
       VOICE_SERVICE_API_KEY: ${VOICE_SERVICE_API_KEY:-dev-voice-service-key}
       WHATSAPP_SERVICE_API_KEY: ${WHATSAPP_SERVICE_API_KEY:-dev-whatsapp-service-key}
       WHATSAPP_OWNER_SECRET: ${WHATSAPP_OWNER_SECRET:-dev-whatsapp-owner-secret}
       MEDIA_DIR: /app/uploads
-      WHATSAPP_OUTREACH_ENABLED: ${WHATSAPP_OUTREACH_ENABLED:-false}
-      WHATSAPP_TEST_RECIPIENTS: ${WHATSAPP_TEST_RECIPIENTS:-}
-      CLINIC_PHONE: ${CLINIC_PHONE:-}
-      RECEPTION_HOURS: ${RECEPTION_HOURS:-Contact the clinic for reception hours.}
-      RECEPTION_RESPONSE: ${RECEPTION_RESPONSE:-Reception will reply during opening hours.}
+      SESSION_COOKIE_NAME: exora_session
+      SESSION_HOURS: 12
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-admin@example.com}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-change-me-in-production}
+      JITSI_DOMAIN: ${JITSI_DOMAIN:-meet.exora.local}
+      JITSI_APP_ID: ${JITSI_APP_ID:-exora-hms}
+      JITSI_ISSUER: ${JITSI_ISSUER:-exora-hms}
+      JITSI_SECRET: ${JITSI_SECRET:-dev-jitsi-secret-change-me}
+      JITSI_TOKEN_MINUTES: 5
+      TELECONSULTATION_CONSENT_VERSION: ${TELECONSULTATION_CONSENT_VERSION:-2026-10-02}
+      DEFAULT_HOSPITAL_SLUG: ${DEFAULT_HOSPITAL_SLUG:-exora-demo}
     volumes:
       - media_uploads:/app/uploads
     depends_on:
@@ -45,39 +33,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 20s
-
-  whatsapp:
-    profiles: ["whatsapp"]
-    build: ./whatsapp-bot
-    env_file: ./whatsapp-bot/.env
-    environment:
-      NODE_ENV: development
-      WA_ENV: development
-      WA_MODE: backend
-      WA_CLINIC_READY: "false"
-      WA_LIVE_NUMBER_CONFIRMED: "false"
-      WA_BIND_HOST: 0.0.0.0
-      WA_LOCAL_PORT: "8787"
-      BACKEND_URL: http://api:8000
-      BACKEND_WHATSAPP_SERVICE_KEY: ${WHATSAPP_SERVICE_API_KEY:-dev-whatsapp-service-key}
-    command: ["node", "server.mjs"]
-    ports:
-      - "127.0.0.1:8787:8787"
-    depends_on:
-      api:
-        condition: service_healthy
-    stop_grace_period: 50s
-    read_only: true
-    tmpfs:
-      - /tmp
-    cap_drop: ["ALL"]
-    security_opt: ["no-new-privileges:true"]
 
   postgres:
     image: postgres:17-alpine

@@ -4,27 +4,23 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from . import audit
 from .admin import require_admin
-from .permissions import require_capability
-from .client_modules import require_whatsapp_module
 from .db import get_db
 from .media import asset_row, media_path, save_upload
-from .models import CaseAttachment, Department, Doctor, MediaAsset, ReminderJob, SupportCase, WhatsAppInbound
+from .models import CaseAttachment, Department, Doctor, MediaAsset, SupportCase
 from .schemas import SupportCaseStatusUpdate
 from .services import DomainError
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin-whatsapp"], dependencies=[Depends(require_whatsapp_module)])
+router = APIRouter(prefix="/api/v1/admin", tags=["admin-whatsapp"])
 page_router = APIRouter()
 
 
-@page_router.get("/whatsapp-assets", include_in_schema=False)
+@page_router.get("/whatsapp-assets", response_class=HTMLResponse)
 def upload_page():
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse("/staff/whatsapp")
+    return Path(__file__).with_name("whatsapp_assets.html").read_text()
 
 
 @router.get("/whatsapp-assets")
@@ -44,7 +40,7 @@ def asset_inventory(_: str = Depends(require_admin), db: Session = Depends(get_d
 
 @router.post("/departments/{department_id}/guide", status_code=201)
 async def guide_upload(department_id: str, file: UploadFile = File(),
-                       _: str = Depends(require_capability("media.manage")), db: Session = Depends(get_db)):
+                       _: str = Depends(require_admin), db: Session = Depends(get_db)):
     department = db.get(Department, department_id)
     if not department:
         raise DomainError("DEPARTMENT_NOT_FOUND", "Department was not found.", 404)
@@ -57,7 +53,7 @@ async def guide_upload(department_id: str, file: UploadFile = File(),
 
 @router.post("/doctors/{doctor_id}/photo", status_code=201)
 async def photo_upload(doctor_id: str, file: UploadFile = File(),
-                       _: str = Depends(require_capability("media.manage")), db: Session = Depends(get_db)):
+                       _: str = Depends(require_admin), db: Session = Depends(get_db)):
     doctor = db.get(Doctor, doctor_id)
     if not doctor:
         raise DomainError("DOCTOR_NOT_FOUND", "Doctor was not found.", 404)
@@ -81,32 +77,12 @@ def cases(limit: int = 100, _: str = Depends(require_admin), db: Session = Depen
             for item in items]
 
 
-@router.get("/whatsapp-delivery-issues")
-def delivery_issues(_: str = Depends(require_admin), db: Session = Depends(get_db)):
-    inbound_counts = dict(db.execute(select(WhatsAppInbound.status, func.count()).group_by(WhatsAppInbound.status)).all())
-    reminder_counts = dict(db.execute(select(ReminderJob.status, func.count()).group_by(ReminderJob.status)).all())
-    inbound = db.scalars(select(WhatsAppInbound).where(WhatsAppInbound.status.in_(("failed", "uncertain")))
-                         .order_by(WhatsAppInbound.created_at.desc()).limit(100)).all()
-    reminders = db.scalars(select(ReminderJob).where(ReminderJob.status.in_(("failed", "uncertain")))
-                           .order_by(ReminderJob.created_at.desc()).limit(100)).all()
-    return {
-        "counts": {"inbound": inbound_counts, "reminders": reminder_counts},
-        "inbound": [{"message_id": item.message_id, "status": item.status,
-                     "created_at": item.created_at, "attempts": item.attempts}
-                    for item in inbound],
-        "reminders": [{"id": item.id, "appointment_id": item.appointment_id,
-                       "status": item.status, "attempts": item.attempts}
-                      for item in reminders],
-    }
-
-
 @router.patch("/whatsapp-cases/{case_id}")
 def case_status(case_id: str, body: SupportCaseStatusUpdate,
                 _: str = Depends(require_admin), db: Session = Depends(get_db)):
     item = db.get(SupportCase, case_id)
     if not item:
         raise DomainError("CASE_NOT_FOUND", "Case was not found.", 404)
-    audit.note(status={"from": item.status, "to": body.status})
     item.status = body.status
     db.commit()
     return {"id": item.id, "status": item.status}

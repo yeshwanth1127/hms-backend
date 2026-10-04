@@ -8,16 +8,3 @@ uploads/
 uv.lock
 .coverage
 htmlcov/
-
-.env.*
-!.env.example
-**/.env
-**/.env.*
-!**/.env.example
-**/node_modules/
-
-app/staff_static/
-staff-web/.vite/
-.local/
-
-output/

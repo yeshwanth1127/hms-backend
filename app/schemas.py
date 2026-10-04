@@ -1,7 +1,7 @@
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 
 class APIModel(BaseModel):
@@ -13,9 +13,6 @@ class BranchOut(APIModel):
     slug: str
     name: str
     area: str
-    address: str = ""
-    directions_url: str = ""
-    arrival_instructions: str = ""
     timezone: str
     is_virtual: bool
 
@@ -49,16 +46,17 @@ class VoiceDoctorOut(DoctorOut):
     virtual_branches: list[BranchOut]
 
 
-class VoiceDoctorsResponse(APIModel):
-    """Envelope so voice-agent Jinja templates can iterate `doctors` by name."""
-    doctors: list[VoiceDoctorOut]
-    count: int
+class VoiceDepartmentMetaOut(APIModel):
+    slug: str
+    name: str
+    synonyms: list[str]
 
 
-class VoiceBranchesResponse(APIModel):
-    """Envelope so voice-agent Jinja templates can iterate `branches` by name."""
-    branches: list[BranchOut]
-    count: int
+class VoiceBranchMetaOut(APIModel):
+    slug: str
+    name: str
+    area: str
+    synonyms: list[str]
 
 
 class AvailabilitySlot(APIModel):
@@ -94,11 +92,6 @@ class HoldOut(APIModel):
     status: str
     expires_at: datetime | None
 
-    @field_validator('starts_at', 'ends_at', 'expires_at')
-    @classmethod
-    def utc_output(cls, value):
-        return value.replace(tzinfo=timezone.utc) if value is not None and value.tzinfo is None else value
-
 
 class AppointmentCreate(BaseModel):
     hold_id: str
@@ -107,26 +100,12 @@ class AppointmentCreate(BaseModel):
     patient_phone: str = Field(min_length=7, max_length=32)
     patient_email: EmailStr | None = None
     reason: str | None = Field(default=None, max_length=800)
-    acquisition_source: Literal["unknown", "direct", "google_business", "organic_search", "paid", "referral"] = "unknown"
     origin_channel: Literal["web", "voice", "staff", "whatsapp"] = "web"
     consent_to_reminders: bool = False
     idempotency_key: str = Field(min_length=8, max_length=120)
 
-    @model_validator(mode="before")
-    @classmethod
-    def blank_optional_fields(cls, data):
-        if isinstance(data, dict):
-            if isinstance(data.get("patient_email"), str) and not data["patient_email"].strip():
-                data["patient_email"] = None
-            if data.get("reason") == "":
-                data["reason"] = None
-            if data.get("origin_channel") in (None, ""):
-                data["origin_channel"] = "web"
-        return data
-
 
 class AppointmentOut(APIModel):
-    consultation_fee: int | None = None
     id: str
     confirmation_code: str
     patient_name: str
@@ -138,29 +117,12 @@ class AppointmentOut(APIModel):
     consent_to_reminders: bool = False
     created_at: datetime
     reservation: HoldOut
-
-
-class VoiceAppointmentSummary(APIModel):
-    id: str
-    confirmation_code: str
-    status: str
-    starts_at: datetime
-    ends_at: datetime
-    doctor_name: str
-    branch_name: str
-    consultation_type: str
-
-
-class VoiceAppointmentsResponse(APIModel):
-    """Envelope so voice-agent Jinja templates can iterate `appointments` by name."""
-    appointments: list[VoiceAppointmentSummary]
-    count: int
+    patient_code: str | None = None
+    patient_access_code: str | None = None
+    patient_account_created: bool = False
 
 
 class WhatsAppAppointmentOut(AppointmentOut):
-    address: str = ""
-    directions_url: str = ""
-    arrival_instructions: str = ""
     doctor_name: str
     branch_name: str
     timezone: str
@@ -232,14 +194,9 @@ class AppointmentStatusUpdate(BaseModel):
 class VoiceSessionCreate(BaseModel):
     runtime_session_id: str = Field(min_length=8, max_length=80)
     channel: Literal["web_voice", "phone"] = "web_voice"
-    interaction_id: str = Field(min_length=8, max_length=160, pattern=r"^[A-Za-z0-9_-]+$")
-    agent_version: int = Field(ge=1)
-    provider_reference: str | None = Field(default=None, max_length=160)
-    recording_consent: bool = False
 
 
 class VoiceSessionEvent(BaseModel):
-    event_id: str = Field(min_length=8, max_length=160)
     tool_name: str = Field(min_length=2, max_length=80)
     kind: Literal["tool", "turn"] = "tool"
     outcome: Literal["success", "error", "cancelled"] = "success"
@@ -248,7 +205,6 @@ class VoiceSessionEvent(BaseModel):
 
 
 class VoiceSessionEnd(BaseModel):
-    event_id: str = Field(min_length=8, max_length=160)
     status: Literal["completed", "abandoned", "error"] = "completed"
 
 
@@ -263,8 +219,6 @@ class WhatsAppHoldCreate(BaseModel):
 
 
 class WhatsAppAppointmentCreate(BaseModel):
-    expected_fee: int | None = Field(default=None, ge=0)
-    outreach_id: str | None = Field(default=None, max_length=36)
     sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
     hold_id: str
     patient_name: str = Field(min_length=2, max_length=160)
@@ -296,7 +250,7 @@ class SupportCaseStatusUpdate(BaseModel):
 
 
 class ReminderComplete(BaseModel):
-    status: Literal["sent", "failed", "uncertain"]
+    status: Literal["sent", "failed"]
     error: str | None = Field(default=None, max_length=240)
 
 
@@ -304,14 +258,3 @@ class WhatsAppConversationSave(BaseModel):
     state: dict
     last_message_id: str = Field(min_length=8, max_length=120)
     last_reply: dict
-
-
-class WhatsAppInboundCreate(BaseModel):
-    message_id: str = Field(min_length=8, max_length=120)
-    sender_id: str = Field(pattern=r"^[0-9]{7,20}$")
-    payload: dict
-
-
-class WhatsAppInboundTransition(BaseModel):
-    claim_token: str = Field(min_length=32, max_length=64)
-    error: str | None = Field(default=None, max_length=240)

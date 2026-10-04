@@ -47,34 +47,24 @@ DATABASE_URL=sqlite:///./avocado.db .venv/bin/uvicorn app.main:app --reload
 
 See the frontend repository's `BACKEND_ARCHITECTURE.md` for the complete delivery plan.
 
+## Virtual OPD development accounts
+
+The development seed creates named hospital accounts so `/admin` and `/virtual-opd` exercise the same session and authorization model used by the API:
+
+- Administrator: `admin@example.com` / `change-me-in-production`
+- Assigned doctor: `doctor@example.com` / `doctor-demo-password`
+- Patient: `patient@example.com` / `patient-demo-password`
+
+These credentials are development fixtures only. Production startup rejects the default bootstrap password and Jitsi secret. Set secure cookies behind HTTPS and configure the Jitsi issuer, app ID, domain, and signing secret for the protected deployment.
+
+After production migrations, create the first named administrator with `python -m app.bootstrap` using `DEFAULT_HOSPITAL_SLUG`, `BOOTSTRAP_ADMIN_EMAIL`, and a one-time `BOOTSTRAP_ADMIN_PASSWORD`. Rotate or remove that bootstrap password immediately; subsequent staff access should use the membership administration workflow.
+
 ## WhatsApp local pilot
 
-The complete Node WhatsApp runtime is included in [`whatsapp-bot/`](./whatsapp-bot/README.md). Configure `whatsapp-bot/.env`, then run `docker compose --profile whatsapp up --build` to start it together with this API. Node can also run separately from the same checkout. The website repository is no longer needed to host the bot. The Compose profile is development-only; see the bot's [production deployment guide](./whatsapp-bot/PRODUCTION_DEPLOYMENT.md) for clinic deployment requirements.
-
-The [WhatsApp contract](./WHATSAPP_CONTRACT.md) lists every bot-facing route and the patient ownership rule. Run this backend on `127.0.0.1:8000`, then build `staff-web`, provision a named administrator and open `http://127.0.0.1:8000/staff/whatsapp` for the shared staff workspace. See [STAFF_WORKSPACE.md](STAFF_WORKSPACE.md) for username/password setup. Upload one PDF per specialty and a PNG/JPEG portrait per doctor. Uploaded files live in `MEDIA_DIR`; back up that directory along with the database.
+The [WhatsApp contract](./WHATSAPP_CONTRACT.md) lists every bot-facing route and the patient ownership rule. Run this backend on `127.0.0.1:8000`, then open `http://127.0.0.1:8000/whatsapp-assets` for the staff drag-and-drop page. Enter `ADMIN_API_KEY` from your local environment; the page keeps it in memory only. Upload one PDF per specialty and a PNG/JPEG portrait per doctor. Uploaded files live in `MEDIA_DIR`; back up that directory along with the database.
 
 Set a distinct `WHATSAPP_SERVICE_API_KEY` and a long random `WHATSAPP_OWNER_SECRET` in the backend environment. Configure the Node bot with the same service key and `BACKEND_URL`. The bot must verify Meta webhook signatures before it sends a `sender_id` to this API. The owner key is derived from that verified sender and never sent by patients. The WhatsApp route only lists or manages appointments created by that WhatsApp sender; it does not reveal existing web or voice appointments by matching a phone number.
 
 The direct public hold and appointment endpoints are disabled when `APP_ENV=production` until the website gains patient authentication. The authenticated voice and WhatsApp integration routes remain available. Reminder jobs are created only when the patient chooses reminder consent. The WhatsApp worker must have an approved utility template configured before it polls due jobs; a successful Meta send request records dispatch, not final delivery.
 
 This repository still seeds illustrative doctors and schedules in development, with schedules only at the first branch. Replace those records with approved clinic data before setting a bot to clinic-ready mode. Production requires PostgreSQL migrations, durable uploaded-file storage, service credentials, staff access controls, and a phone walkthrough; local API tests alone do not establish those conditions.
-
-## WhatsApp outreach and reception
-
-See [WHATSAPP_OUTREACH.md](WHATSAPP_OUTREACH.md) for consent, campaign approval,
-reception handoff, clinic details, follow-up contracts and rollout switches.
-
-## Shared staff workspace
-
-Appointments, doctors, schedules and optional WhatsApp/Google/growth modules share
-a shadcn interface and named staff login. See [STAFF_WORKSPACE.md](STAFF_WORKSPACE.md)
-for setup and [the UX decision book](STAFF_WORKSPACE_UX_DECISION_BOOK.md) for the
-design rationale, trade-offs and verification boundaries.
-
-## Optional Voice module
-
-Sarvam admission, call history and administrator recording review are bundled with the API. See [VOICE_MODULE.md](VOICE_MODULE.md) for the callback contract, recording setup, same-origin website routing and verification boundaries.
-
-## Unified dashboard and local demo
-
-See [DASHBOARD_MIGRATION.md](DASHBOARD_MIGRATION.md) for the former dashboard feature audit, one-workspace routing and disposable all-module demo.
